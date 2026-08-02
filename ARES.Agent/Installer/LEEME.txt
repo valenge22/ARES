@@ -9,7 +9,9 @@ INSTALACIÓN
 3. Ingresá la clave proporcionada por el administrador. La dirección del servidor
    https://ares-3bic.onrender.com ya está configurada.
 4. Aceptá el permiso de administrador.
-5. El escudo de ARES aparecerá junto al reloj de Windows.
+5. Creá una contraseña diferente, de al menos 8 caracteres, para proteger la
+   desinstalación. Guardala en un lugar seguro.
+6. El escudo de ARES aparecerá junto al reloj de Windows.
 
 El instalador copia la aplicación en Archivos de programa y configura el inicio
 automático al ingresar a Windows. Sólo realiza conexiones HTTPS salientes: no abre
@@ -18,7 +20,8 @@ Por seguridad operativa, el agente no puede cerrarse desde su ícono. Para retir
 un administrador debe ejecutar el desinstalador incluido.
 
 DESINSTALACIÓN
-Ejecutá DESINSTALAR.bat como administrador desde este mismo paquete.
+Ejecutá DESINSTALAR.bat desde este mismo paquete. Windows solicitará permisos de
+administrador y luego la contraseña exclusiva de desinstalación.
 
 REQUISITOS
 Windows 10/11 de 64 bits. No necesita instalar .NET por separado.

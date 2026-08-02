@@ -1,0 +1,44 @@
+name: Publicar ARES Centro de Control macOS
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "mac-v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-15
+    steps:
+      - name: Obtener código
+        uses: actions/checkout@v4
+      - name: Instalar .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+      - name: Publicar aplicación ARM64
+        run: dotnet publish ARES.ControlCenter.Mac/ARES.ControlCenter.Mac.csproj -c Release -r osx-arm64 --self-contained true -p:PublishSingleFile=true -o publish/mac
+      - name: Crear aplicación e instalador
+        run: |
+          APP="dist/ARES Centro de Control.app"
+          mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
+          cp ARES.ControlCenter.Mac/Info.plist "$APP/Contents/Info.plist"
+          cp -R publish/mac/* "$APP/Contents/MacOS/"
+          chmod +x "$APP/Contents/MacOS/ARES.ControlCenter.Mac"
+          pkgbuild --component "$APP" --install-location /Applications "dist/ARES-Centro-Control-macOS-arm64.pkg"
+          ditto -c -k --keepParent "$APP" "dist/ARES-Centro-Control-macOS-arm64.zip"
+      - name: Publicar artefactos
+        uses: actions/upload-artifact@v4
+        with:
+          name: ARES-Centro-Control-macOS-arm64
+          path: |
+            dist/ARES-Centro-Control-macOS-arm64.pkg
+            dist/ARES-Centro-Control-macOS-arm64.zip
+      - name: Crear GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "${{ github.ref_name }}" dist/*.pkg dist/*.zip --title "ARES Centro de Control macOS ${{ github.ref_name }}" --notes "Centro de Control para Apple Silicon (arm64), sin firma de Apple."

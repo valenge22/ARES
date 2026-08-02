@@ -109,6 +109,27 @@ namespace AdministracionEmpleados
         {
             var contenedor = CrearTarjeta();
             var encabezado = CrearEncabezadoTarjeta("Equipos registrados", "Estado y acciones disponibles en tiempo real");
+            var actualizar = new Button
+            {
+                Text = "↻  Actualizar",
+                Dock = DockStyle.Right,
+                Width = 132,
+                FlatStyle = FlatStyle.Flat,
+                BackColor = Color.FromArgb(37, 99, 235),
+                ForeColor = Color.White,
+                Font = new Font("Segoe UI", 9F, FontStyle.Bold),
+                Cursor = Cursors.Hand,
+                Margin = new Padding(0, 18, 18, 18)
+            };
+            actualizar.FlatAppearance.BorderSize = 0;
+            actualizar.Click += async (_, _) =>
+            {
+                actualizar.Enabled = false;
+                actualizar.Text = "Actualizando…";
+                await BuscarEquiposAsync();
+            };
+            encabezado.Padding = new Padding(22, 13, 18, 13);
+            encabezado.Controls.Add(actualizar);
             var tabla = CrearTablaEquipos();
             tabla.Dock = DockStyle.Fill;
             contenedor.Controls.Add(tabla);
@@ -267,11 +288,41 @@ namespace AdministracionEmpleados
         private Control CrearVistaConfiguracion()
         {
             var tarjeta = CrearTarjeta();
-            var titulo = CrearEncabezadoTarjeta("Conexión del agente", "Parámetros usados para comunicarse con los equipos");
+            var titulo = CrearEncabezadoTarjeta("Servidor remoto", "Configuración usada por esta consola administrativa");
+            AresSettings configuracion = AresSettings.Cargar();
             var contenido = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.TopDown, Padding = new Padding(28, 22, 28, 28), WrapContents = false };
-            contenido.Controls.Add(CrearCampoConfiguracion("Servidor", "127.0.0.1"));
-            contenido.Controls.Add(CrearCampoConfiguracion("Puerto", "5000"));
-            contenido.Controls.Add(new CheckBox { Text = "  Verificar la conexión al iniciar", Checked = true, AutoSize = true, Margin = new Padding(0, 18, 0, 0), ForeColor = Color.FromArgb(51, 65, 85) });
+            TextBox txtServidor = CrearCampoConfiguracion("URL HTTPS del servidor", configuracion.ServerUrl, contenido);
+            TextBox txtClave = CrearCampoConfiguracion("Clave compartida ARES", configuracion.ApiKey, contenido);
+            txtClave.UseSystemPasswordChar = true;
+            var estado = new Label { AutoSize = true, ForeColor = Color.FromArgb(100, 116, 139), Margin = new Padding(0, 14, 0, 0), Text = "La clave se guarda solamente en esta computadora." };
+            var guardar = new Button { Text = "Guardar y probar conexión", Width = 220, Height = 40, Margin = new Padding(0, 20, 0, 0), FlatStyle = FlatStyle.Flat, BackColor = Color.FromArgb(37, 99, 235), ForeColor = Color.White, Cursor = Cursors.Hand };
+            guardar.FlatAppearance.BorderSize = 0;
+            guardar.Click += async (_, _) =>
+            {
+                if (!Uri.TryCreate(txtServidor.Text.Trim(), UriKind.Absolute, out Uri? uri) || uri.Scheme != Uri.UriSchemeHttps)
+                {
+                    estado.ForeColor = Color.FromArgb(220, 38, 38);
+                    estado.Text = "Ingresá una dirección HTTPS válida.";
+                    return;
+                }
+                if (string.IsNullOrWhiteSpace(txtClave.Text) || txtClave.Text == "CAMBIAR-ESTA-CLAVE")
+                {
+                    estado.ForeColor = Color.FromArgb(220, 38, 38);
+                    estado.Text = "Ingresá la misma clave configurada como ARES_API_KEY en Render.";
+                    return;
+                }
+
+                new AresSettings { ServerUrl = txtServidor.Text.TrimEnd('/'), ApiKey = txtClave.Text }.GuardarLocal();
+                guardar.Enabled = false;
+                estado.ForeColor = Color.FromArgb(37, 99, 235);
+                estado.Text = "Probando conexión…";
+                await BuscarEquiposAsync();
+                guardar.Enabled = true;
+                estado.ForeColor = lblConexion.Text.StartsWith("Error") ? Color.FromArgb(220, 38, 38) : Color.FromArgb(22, 163, 74);
+                estado.Text = lblConexion.Text.StartsWith("Error") ? lblConexion.Text : "Configuración guardada. Conexión correcta.";
+            };
+            contenido.Controls.Add(guardar);
+            contenido.Controls.Add(estado);
             tarjeta.Controls.Add(contenido);
             tarjeta.Controls.Add(titulo);
             return tarjeta;
@@ -322,12 +373,14 @@ namespace AdministracionEmpleados
             return panel;
         }
 
-        private static Panel CrearCampoConfiguracion(string etiqueta, string valor)
+        private static TextBox CrearCampoConfiguracion(string etiqueta, string valor, Control contenedor)
         {
             var panel = new Panel { Width = 500, Height = 72, Margin = new Padding(0, 0, 0, 8) };
             panel.Controls.Add(new Label { Text = etiqueta, AutoSize = true, Font = new Font("Segoe UI", 9F, FontStyle.Bold), ForeColor = Color.FromArgb(71, 85, 105), Location = new Point(0, 0) });
-            panel.Controls.Add(new TextBox { Text = valor, Width = 430, Location = new Point(0, 27), Font = new Font("Segoe UI", 10F), BorderStyle = BorderStyle.FixedSingle });
-            return panel;
+            var campo = new TextBox { Text = valor, Width = 430, Location = new Point(0, 27), Font = new Font("Segoe UI", 10F), BorderStyle = BorderStyle.FixedSingle };
+            panel.Controls.Add(campo);
+            contenedor.Controls.Add(panel);
+            return campo;
         }
 
         private async void ActualizarEstadoConexion()

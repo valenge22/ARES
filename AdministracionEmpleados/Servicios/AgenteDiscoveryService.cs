@@ -7,16 +7,19 @@ public sealed record AgenteDetectado(string Equipo, string Usuario, string Direc
 
 public sealed class AgenteDiscoveryService
 {
-    private readonly AresSettings configuracion = AresSettings.Cargar();
-
     public async Task<IReadOnlyList<AgenteDetectado>> BuscarAsync(
         IEnumerable<string> direccionesConocidas,
         CancellationToken cancelacion = default)
     {
+        AresSettings configuracion = AresSettings.Cargar();
         using var cliente = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
         cliente.DefaultRequestHeaders.Add("X-ARES-Key", configuracion.ApiKey);
-        List<AgentStatus>? agentes = await cliente.GetFromJsonAsync<List<AgentStatus>>(
+        using HttpResponseMessage respuesta = await cliente.GetAsync(
             $"{configuracion.ServerUrl.TrimEnd('/')}/api/agents", cancelacion);
+        if (respuesta.StatusCode == System.Net.HttpStatusCode.Unauthorized)
+            throw new InvalidOperationException("La clave ARES no coincide con la configurada en Render.");
+        respuesta.EnsureSuccessStatusCode();
+        List<AgentStatus>? agentes = await respuesta.Content.ReadFromJsonAsync<List<AgentStatus>>(cancelacion);
 
         return (agentes ?? [])
             .Where(a => a.EstaEnLinea)

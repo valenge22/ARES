@@ -88,9 +88,14 @@ $principalServicio = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType Serv
 Register-ScheduledTask -TaskName $nombreTareaServicio -Action $accionServicio -Trigger $disparadorServicio `
     -Principal $principalServicio -Settings $configuracion `
     -Description 'Mantiene la conexion remota de ARES y aplica el bloqueo nativo.' -Force | Out-Null
+# El instalador está elevado y Start-Process abriría el agente en la sesión del
+# administrador. La tarea lo inicia con la identidad y la sesión del empleado.
+Start-ScheduledTask -TaskName $nombreTarea
+Start-Sleep -Seconds 2
+if ((Get-ScheduledTask -TaskName $nombreTarea).State -ne 'Running') {
+    throw "No se pudo iniciar ARES Agent en la sesión de '$usuarioAdministrado'. Verificá que esa cuenta esté desbloqueada y tenga una sesión iniciada."
+}
 Start-ScheduledTask -TaskName $nombreTareaServicio
-
-Start-Process $ejecutable
 Set-Content -LiteralPath $LogPath -Value "Instalación completada correctamente el $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')." -Encoding UTF8
 
 Add-Type -AssemblyName PresentationFramework

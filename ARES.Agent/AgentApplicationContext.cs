@@ -1,4 +1,5 @@
 using ARES.Agent.Servicios;
+using System.Runtime.InteropServices;
 
 namespace ARES.Agent;
 
@@ -58,6 +59,10 @@ internal sealed class AgentApplicationContext : ApplicationContext
                     restricciones.Add(formulario);
                     formulario.Show();
                 }
+
+                // Debe invocarse desde el proceso interactivo del empleado. Un proceso
+                // SYSTEM en la sesion 0 no puede bloquear visualmente la consola activa.
+                LockWorkStation();
             }
             else if (!bloqueado && restricciones.Count > 0)
             {
@@ -100,4 +105,8 @@ internal sealed class AgentApplicationContext : ApplicationContext
         }
         base.Dispose(disposing);
     }
+
+    [DllImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool LockWorkStation();
 }

@@ -29,7 +29,7 @@ public sealed class NetworkService : IDisposable
                         ? Environment.UserName
                         : configuracion.ManagedUser,
                     Sistema = Environment.OSVersion.VersionString,
-                    Version = "1.1",
+                    Version = typeof(NetworkService).Assembly.GetName().Version?.ToString(3) ?? "1.3.1",
                     BloqueadoLocalmente = LeerEstadoLocal()
                 };
 

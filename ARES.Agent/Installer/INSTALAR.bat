@@ -1,6 +1,8 @@
 @echo off
 chcp 65001 >nul
 title Instalador de ARES Agent
+set "ARES_LOG=%TEMP%\ARES-Agent-Install.log"
+if exist "%ARES_LOG%" del /q "%ARES_LOG%"
 echo ========================================
 echo        INSTALADOR DE ARES AGENT
 echo ========================================
@@ -23,10 +25,25 @@ if "%ARES_KEY%"=="" (
     exit /b 1
 )
 
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0Instalar-ARES-Agent.ps1" -ServerUrl "https://ares-3bic.onrender.com" -ApiKey "%ARES_KEY%"
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0Instalar-ARES-Agent.ps1" -ServerUrl "https://ares-3bic.onrender.com" -ApiKey "%ARES_KEY%" -LogPath "%ARES_LOG%"
 if errorlevel 1 (
     echo.
-    echo La instalacion no pudo completarse. Revisa el error mostrado arriba.
+    echo La instalacion no pudo completarse.
+    echo.
+    if exist "%ARES_LOG%" (
+        echo DETALLE DEL ERROR:
+        echo ----------------------------------------
+        type "%ARES_LOG%"
+        echo ----------------------------------------
+    ) else (
+        echo No se genero el registro. Es posible que se haya cancelado el permiso de administrador.
+    )
+    echo.
+    echo Registro: %ARES_LOG%
     pause
     exit /b 1
 )
+
+echo.
+echo Instalacion completada correctamente.
+pause

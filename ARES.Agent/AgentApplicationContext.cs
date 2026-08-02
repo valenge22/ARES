@@ -8,6 +8,7 @@ internal sealed class AgentApplicationContext : ApplicationContext
     private readonly NetworkService network = new();
     private readonly CancellationTokenSource cancelacion = new();
     private readonly SynchronizationContext contextoUi;
+    private readonly List<RestrictionForm> restricciones = [];
 
     public AgentApplicationContext()
     {
@@ -35,6 +36,7 @@ internal sealed class AgentApplicationContext : ApplicationContext
         try
         {
             network.EstadoCambiado += ActualizarEstado;
+            network.RestriccionCambiada += AplicarRestriccion;
             await network.IniciarAsync(cancelacion.Token);
         }
         catch (OperationCanceledException) { }
@@ -42,6 +44,28 @@ internal sealed class AgentApplicationContext : ApplicationContext
         {
             ActualizarEstado($"Error: {ex.Message}", false);
         }
+    }
+
+    private void AplicarRestriccion(bool bloqueado)
+    {
+        contextoUi.Post(_ =>
+        {
+            if (bloqueado && restricciones.Count == 0)
+            {
+                foreach (Screen pantalla in Screen.AllScreens)
+                {
+                    var formulario = new RestrictionForm(pantalla);
+                    restricciones.Add(formulario);
+                    formulario.Show();
+                }
+            }
+            else if (!bloqueado && restricciones.Count > 0)
+            {
+                foreach (RestrictionForm formulario in restricciones.ToArray())
+                    formulario.RetirarRestriccion();
+                restricciones.Clear();
+            }
+        }, null);
     }
 
     private void ActualizarEstado(string estado, bool activo)
@@ -66,6 +90,9 @@ internal sealed class AgentApplicationContext : ApplicationContext
     {
         if (disposing)
         {
+            network.NotificarCierreAsync().GetAwaiter().GetResult();
+            foreach (RestrictionForm formulario in restricciones.ToArray())
+                formulario.RetirarRestriccion();
             cancelacion.Cancel();
             cancelacion.Dispose();
             network.Dispose();

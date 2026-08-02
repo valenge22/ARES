@@ -9,7 +9,9 @@ public sealed class NetworkService : IDisposable
 {
     private readonly HttpClient cliente = new() { Timeout = TimeSpan.FromSeconds(10) };
     private readonly AgentSettings configuracion = AgentSettings.Cargar();
+    private readonly string agentId = ObtenerIdEquipo();
     public event Action<string, bool>? EstadoCambiado;
+    public event Action<bool>? RestriccionCambiada;
 
     public async Task IniciarAsync(CancellationToken cancelacion)
     {
@@ -21,7 +23,7 @@ public sealed class NetworkService : IDisposable
             {
                 var heartbeat = new AgentHeartbeat
                 {
-                    Id = ObtenerIdEquipo(),
+                    Id = agentId,
                     Equipo = Environment.MachineName,
                     Usuario = Environment.UserName,
                     Sistema = Environment.OSVersion.VersionString,
@@ -32,6 +34,9 @@ public sealed class NetworkService : IDisposable
                     $"{configuracion.ServerUrl.TrimEnd('/')}/api/agents/heartbeat",
                     heartbeat, cancelacion);
                 respuesta.EnsureSuccessStatusCode();
+                HeartbeatResponse? politica = await respuesta.Content.ReadFromJsonAsync<HeartbeatResponse>(cancellationToken: cancelacion);
+                if (politica != null)
+                    RestriccionCambiada?.Invoke(politica.BloqueadoAdministrativamente);
                 EstadoCambiado?.Invoke("Conectado al servidor remoto", true);
             }
             catch (OperationCanceledException) when (cancelacion.IsCancellationRequested) { break; }
@@ -42,6 +47,17 @@ public sealed class NetworkService : IDisposable
 
             await Task.Delay(TimeSpan.FromSeconds(Math.Max(5, configuracion.HeartbeatSeconds)), cancelacion);
         }
+    }
+
+    public async Task NotificarCierreAsync()
+    {
+        try
+        {
+            using var cierre = new HttpClient { Timeout = TimeSpan.FromSeconds(3) };
+            cierre.DefaultRequestHeaders.Add("X-ARES-Key", configuracion.ApiKey);
+            await cierre.PostAsync($"{configuracion.ServerUrl.TrimEnd('/')}/api/agents/{agentId}/closed", null);
+        }
+        catch { }
     }
 
     private static string ObtenerIdEquipo()

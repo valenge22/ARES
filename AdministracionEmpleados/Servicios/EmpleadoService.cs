@@ -77,6 +77,7 @@ namespace AdministracionEmpleados.Servicios
             foreach (AgenteDetectado agente in detectados)
             {
                 Empleado? empleado = empleados.FirstOrDefault(e =>
+                    e.Computadora.AgentId == agente.Id ||
                     e.Computadora.Nombre.Equals(agente.Equipo, StringComparison.OrdinalIgnoreCase) ||
                     e.Computadora.DireccionIP == agente.DireccionIp);
 
@@ -91,11 +92,13 @@ namespace AdministracionEmpleados.Servicios
                 }
 
                 empleado.Nombre = agente.Usuario;
+                empleado.Computadora.AgentId = agente.Id;
                 empleado.Computadora.Nombre = agente.Equipo;
                 empleado.Computadora.DireccionIP = agente.DireccionIp;
                 empleado.Computadora.SistemaOperativo = agente.Sistema;
                 empleado.Computadora.EstaEncendida = true;
                 empleado.Computadora.EstaLogueada = !string.IsNullOrWhiteSpace(agente.Usuario);
+                empleado.Computadora.EstaBloqueada = agente.Bloqueado;
             }
         }
     }

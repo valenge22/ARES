@@ -197,7 +197,7 @@ namespace AdministracionEmpleados
                     ? Color.FromArgb(22, 163, 74) : Color.FromArgb(220, 38, 38);
             }
 
-            tabla.CellContentClick += (_, e) =>
+            tabla.CellContentClick += async (_, e) =>
             {
                 if (e.RowIndex < 0 || tabla.Rows[e.RowIndex].Tag is not Empleado empleado) return;
                 if (tabla.Columns[e.ColumnIndex].Name == "Ver")
@@ -208,11 +208,32 @@ namespace AdministracionEmpleados
                 }
                 else if (tabla.Columns[e.ColumnIndex].Name == "Accion")
                 {
-                    if (empleado.Computadora.EstaBloqueada)
-                        empleadoService.Desbloquear(empleado);
-                    else
-                        empleadoService.Bloquear(empleado);
-                    MostrarSeccion(btnEquipos);
+                    Computadora pc = empleado.Computadora;
+                    if (string.IsNullOrWhiteSpace(pc.AgentId))
+                    {
+                        MessageBox.Show("Este equipo todavía no está registrado en el servidor remoto.", "ARES",
+                            MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                        return;
+                    }
+
+                    bool bloquear = !pc.EstaBloqueada;
+                    string accion = bloquear ? "bloquear" : "desbloquear";
+                    if (MessageBox.Show($"¿Confirmás que querés {accion} {pc.Nombre}?", "ARES",
+                        MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
+
+                    try
+                    {
+                        tabla.Enabled = false;
+                        await discoveryService.EstablecerRestriccionAsync(pc.AgentId, bloquear);
+                        pc.EstaBloqueada = bloquear;
+                        await BuscarEquiposAsync();
+                    }
+                    catch (Exception ex)
+                    {
+                        MessageBox.Show($"No se pudo {accion} el equipo.\n\n{ex.Message}", "ARES",
+                            MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    }
+                    finally { if (!tabla.IsDisposed) tabla.Enabled = true; }
                 }
             };
             return tabla;
@@ -272,11 +293,44 @@ namespace AdministracionEmpleados
 
         private Control CrearVistaSeguridad()
         {
-            int bloqueados = empleadoService.ObtenerEmpleados().Count(e => e.Computadora.EstaBloqueada);
             var tarjeta = CrearTarjeta();
-            tarjeta.Controls.Add(CrearMensajeCentral("Protección activa", $"{bloqueados} equipos bloqueados · No se detectaron alertas críticas."));
+            var tabla = CrearListaSimple(
+                new[] { "FECHA Y HORA", "EQUIPO", "EVENTO", "DETALLE" }, []);
+            tarjeta.Controls.Add(tabla);
+            tarjeta.Controls.Add(CrearEncabezadoTarjeta("Registro de seguridad", "Bloqueos, desbloqueos y conexiones de los agentes"));
+            _ = CargarAuditoriaAsync(tabla);
             return tarjeta;
         }
+
+        private async Task CargarAuditoriaAsync(DataGridView tabla)
+        {
+            try
+            {
+                IReadOnlyList<AgentAuditEvent> eventos = await discoveryService.ObtenerAuditoriaAsync();
+                if (tabla.IsDisposed) return;
+                foreach (AgentAuditEvent evento in eventos)
+                {
+                    DateTimeOffset horaLocal = evento.FechaUtc.ToLocalTime();
+                    tabla.Rows.Add(horaLocal.ToString("dd/MM/yyyy HH:mm:ss"), evento.Equipo,
+                        FormatearTipoEvento(evento.Tipo), evento.Detalle);
+                }
+            }
+            catch (Exception ex)
+            {
+                if (!tabla.IsDisposed)
+                    tabla.Rows.Add(DateTime.Now.ToString("dd/MM/yyyy HH:mm:ss"), "Servidor", "Error", ex.Message);
+            }
+        }
+
+        private static string FormatearTipoEvento(string tipo) => tipo switch
+        {
+            "USUARIO_BLOQUEADO" => "Bloqueado",
+            "USUARIO_DESBLOQUEADO" => "Desbloqueado",
+            "AGENTE_CONECTADO" => "Agente conectado",
+            "AGENTE_CERRADO" => "Programa cerrado",
+            "AGENTE_DESCONECTADO" => "Conexión perdida",
+            _ => tipo
+        };
 
         private Control CrearVistaPantallas()
         {

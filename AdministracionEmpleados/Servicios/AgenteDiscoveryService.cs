@@ -3,7 +3,7 @@ using System.Net.Http.Json;
 
 namespace AdministracionEmpleados.Servicios;
 
-public sealed record AgenteDetectado(string Equipo, string Usuario, string DireccionIp, string Sistema);
+public sealed record AgenteDetectado(string Id, string Equipo, string Usuario, string DireccionIp, string Sistema, bool Bloqueado);
 
 public sealed class AgenteDiscoveryService
 {
@@ -23,7 +23,29 @@ public sealed class AgenteDiscoveryService
 
         return (agentes ?? [])
             .Where(a => a.EstaEnLinea)
-            .Select(a => new AgenteDetectado(a.Equipo, a.Usuario, "Remoto", a.Sistema))
+            .Select(a => new AgenteDetectado(a.Id, a.Equipo, a.Usuario, "Remoto", a.Sistema, a.BloqueadoAdministrativamente))
             .ToList();
+    }
+
+    public async Task EstablecerRestriccionAsync(string agentId, bool bloqueado, CancellationToken cancelacion = default)
+    {
+        AresSettings configuracion = AresSettings.Cargar();
+        using var cliente = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
+        cliente.DefaultRequestHeaders.Add("X-ARES-Key", configuracion.ApiKey);
+        using HttpResponseMessage respuesta = await cliente.PutAsJsonAsync(
+            $"{configuracion.ServerUrl.TrimEnd('/')}/api/agents/{agentId}/restriction",
+            new RestrictionRequest { Bloqueado = bloqueado }, cancelacion);
+        if (respuesta.StatusCode == System.Net.HttpStatusCode.Unauthorized)
+            throw new InvalidOperationException("La clave ARES no coincide con Render.");
+        respuesta.EnsureSuccessStatusCode();
+    }
+
+    public async Task<IReadOnlyList<AgentAuditEvent>> ObtenerAuditoriaAsync(CancellationToken cancelacion = default)
+    {
+        AresSettings configuracion = AresSettings.Cargar();
+        using var cliente = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
+        cliente.DefaultRequestHeaders.Add("X-ARES-Key", configuracion.ApiKey);
+        return await cliente.GetFromJsonAsync<List<AgentAuditEvent>>(
+            $"{configuracion.ServerUrl.TrimEnd('/')}/api/audit", cancelacion) ?? [];
     }
 }

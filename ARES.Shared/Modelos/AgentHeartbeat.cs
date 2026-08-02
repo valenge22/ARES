@@ -13,4 +13,27 @@ public sealed class AgentStatus : AgentHeartbeat
 {
     public DateTimeOffset UltimaConexionUtc { get; set; }
     public bool EstaEnLinea { get; set; }
+    public bool BloqueadoAdministrativamente { get; set; }
+}
+
+public sealed class HeartbeatResponse
+{
+    public bool Accepted { get; set; }
+    public DateTimeOffset ServerTimeUtc { get; set; }
+    public bool BloqueadoAdministrativamente { get; set; }
+}
+
+public sealed class RestrictionRequest
+{
+    public bool Bloqueado { get; set; }
+}
+
+public sealed class AgentAuditEvent
+{
+    public string Id { get; set; } = Guid.NewGuid().ToString("N");
+    public string AgentId { get; set; } = "";
+    public string Equipo { get; set; } = "";
+    public string Tipo { get; set; } = "";
+    public string Detalle { get; set; } = "";
+    public DateTimeOffset FechaUtc { get; set; }
 }

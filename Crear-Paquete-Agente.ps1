@@ -21,5 +21,9 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 Copy-Item (Join-Path $raiz 'ARES.Agent\Installer\*') $salida -Force
+Get-ChildItem -Path $salida -Filter '*.bat' | ForEach-Object {
+    $contenido = [IO.File]::ReadAllText($_.FullName) -replace "`r?`n", "`r`n"
+    [IO.File]::WriteAllText($_.FullName, $contenido, [Text.UTF8Encoding]::new($false))
+}
 Compress-Archive -Path (Join-Path $salida '*') -DestinationPath $zip -CompressionLevel Optimal
 Write-Host "Paquete creado: $zip"

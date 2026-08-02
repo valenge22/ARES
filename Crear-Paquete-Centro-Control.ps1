@@ -19,5 +19,11 @@ dotnet publish (Join-Path $raiz 'AdministracionEmpleados\AdministracionEmpleados
 if ($LASTEXITCODE -ne 0) { throw "No se pudo compilar el Centro de Control. Código: $LASTEXITCODE" }
 
 Copy-Item (Join-Path $raiz 'AdministracionEmpleados\Installer\*') $salida -Force
+
+# cmd.exe requiere finales de línea CRLF para interpretar los .bat de forma fiable.
+Get-ChildItem -Path $salida -Filter '*.bat' | ForEach-Object {
+    $contenido = [IO.File]::ReadAllText($_.FullName) -replace "`r?`n", "`r`n"
+    [IO.File]::WriteAllText($_.FullName, $contenido, [Text.UTF8Encoding]::new($false))
+}
 Compress-Archive -Path (Join-Path $salida '*') -DestinationPath $zip -CompressionLevel Optimal
 Write-Host "Paquete creado: $zip"

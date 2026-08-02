@@ -7,6 +7,7 @@ namespace AdministracionEmpleados
     {
         private readonly EmpleadoService empleadoService = new();
         private readonly AgenteDiscoveryService discoveryService = new();
+        private readonly AuditCacheService auditCacheService = new();
         private readonly System.Windows.Forms.Timer temporizadorDescubrimiento = new() { Interval = 8000 };
         private readonly Dictionary<Button, (string Titulo, string Subtitulo)> secciones;
         private Button? botonActivo;
@@ -312,21 +313,32 @@ namespace AdministracionEmpleados
 
         private async Task CargarAuditoriaAsync(DataGridView tabla)
         {
+            IReadOnlyList<AgentAuditEvent> eventos = auditCacheService.Cargar();
+            MostrarEventosAuditoria(tabla, eventos);
+
             try
             {
-                IReadOnlyList<AgentAuditEvent> eventos = await discoveryService.ObtenerAuditoriaAsync();
+                IReadOnlyList<AgentAuditEvent> remotos = await discoveryService.ObtenerAuditoriaAsync();
                 if (tabla.IsDisposed) return;
-                foreach (AgentAuditEvent evento in eventos)
-                {
-                    DateTimeOffset horaLocal = evento.FechaUtc.ToLocalTime();
-                    tabla.Rows.Add(horaLocal.ToString("dd/MM/yyyy HH:mm:ss"), evento.Equipo,
-                        FormatearTipoEvento(evento.Tipo), evento.Detalle);
-                }
+                eventos = auditCacheService.CombinarYGuardar(remotos);
+                tabla.Rows.Clear();
+                MostrarEventosAuditoria(tabla, eventos);
             }
             catch (Exception ex)
             {
-                if (!tabla.IsDisposed)
+                if (!tabla.IsDisposed && eventos.Count == 0)
                     tabla.Rows.Add(DateTime.Now.ToString("dd/MM/yyyy HH:mm:ss"), "Servidor", "Error", ex.Message);
+            }
+        }
+
+        private static void MostrarEventosAuditoria(DataGridView tabla, IEnumerable<AgentAuditEvent> eventos)
+        {
+            if (tabla.IsDisposed) return;
+            foreach (AgentAuditEvent evento in eventos.OrderByDescending(e => e.FechaUtc))
+            {
+                DateTimeOffset horaLocal = evento.FechaUtc.ToLocalTime();
+                tabla.Rows.Add(horaLocal.ToString("dd/MM/yyyy HH:mm:ss"), evento.Equipo,
+                    FormatearTipoEvento(evento.Tipo), evento.Detalle);
             }
         }
 

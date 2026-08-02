@@ -54,7 +54,7 @@ internal sealed class AgentApplicationContext : ApplicationContext
             {
                 foreach (Screen pantalla in Screen.AllScreens)
                 {
-                    var formulario = new RestrictionForm(pantalla);
+                    var formulario = new RestrictionForm(pantalla, network.SolicitarDesbloqueoAsync);
                     restricciones.Add(formulario);
                     formulario.Show();
                 }

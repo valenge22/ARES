@@ -56,7 +56,9 @@ app.MapPost("/api/agents/heartbeat", async (AgentHeartbeat heartbeat) =>
         Version = heartbeat.Version,
         UltimaConexionUtc = DateTimeOffset.UtcNow,
         EstaEnLinea = true,
-        BloqueadoAdministrativamente = anterior?.BloqueadoAdministrativamente ?? false
+        BloqueadoAdministrativamente = anterior?.BloqueadoAdministrativamente ?? false,
+        SolicitudDesbloqueoPendiente = anterior?.SolicitudDesbloqueoPendiente ?? false,
+        SolicitudDesbloqueoUtc = anterior?.SolicitudDesbloqueoUtc
     };
     if (!estabaEnLinea)
         await RegistrarEventoAsync(heartbeat.Id, heartbeat.Equipo, "AGENTE_CONECTADO", "ARES Agent inició o recuperó la conexión.");
@@ -75,11 +77,31 @@ app.MapPut("/api/agents/{id}/restriction", async (string id, RestrictionRequest 
         return Results.NotFound(new { error = "El agente no está registrado." });
 
     agente.BloqueadoAdministrativamente = request.Bloqueado;
+    agente.SolicitudDesbloqueoPendiente = false;
+    agente.SolicitudDesbloqueoUtc = null;
     await RegistrarEventoAsync(id, agente.Equipo,
         request.Bloqueado ? "USUARIO_BLOQUEADO" : "USUARIO_DESBLOQUEADO",
         request.Bloqueado ? "Restricción activada desde la consola ARES." : "Restricción retirada desde la consola ARES.");
     await GuardarAsync();
     return Results.Ok(new { updated = true, bloqueado = request.Bloqueado });
+});
+
+app.MapPost("/api/agents/{id}/unlock-request", async (string id) =>
+{
+    if (!agents.TryGetValue(id, out AgentStatus? agente))
+        return Results.NotFound(new { error = "El agente no está registrado." });
+    if (!agente.BloqueadoAdministrativamente)
+        return Results.Conflict(new { error = "El equipo no está bloqueado." });
+
+    if (!agente.SolicitudDesbloqueoPendiente)
+    {
+        agente.SolicitudDesbloqueoPendiente = true;
+        agente.SolicitudDesbloqueoUtc = DateTimeOffset.UtcNow;
+        await RegistrarEventoAsync(id, agente.Equipo, "SOLICITUD_DESBLOQUEO",
+            "El usuario solicitó al administrador que retire la restricción.");
+        await GuardarAsync();
+    }
+    return Results.Ok(new { received = true, requestedAtUtc = agente.SolicitudDesbloqueoUtc });
 });
 
 app.MapPost("/api/agents/{id}/closed", async (string id) =>
@@ -102,7 +124,9 @@ app.MapGet("/api/agents", () =>
             Id = a.Id, Equipo = a.Equipo, Usuario = a.Usuario, Sistema = a.Sistema,
             Version = a.Version, UltimaConexionUtc = a.UltimaConexionUtc,
             EstaEnLinea = a.UltimaConexionUtc >= limite,
-            BloqueadoAdministrativamente = a.BloqueadoAdministrativamente
+            BloqueadoAdministrativamente = a.BloqueadoAdministrativamente,
+            SolicitudDesbloqueoPendiente = a.SolicitudDesbloqueoPendiente,
+            SolicitudDesbloqueoUtc = a.SolicitudDesbloqueoUtc
         })
         .OrderBy(a => a.Equipo);
 });

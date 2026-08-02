@@ -56,6 +56,8 @@ namespace AdministracionEmpleados.Servicios
                 empleado.Computadora.EstaEncendida = true;
                 empleado.Computadora.EstaLogueada = !string.IsNullOrWhiteSpace(agente.Usuario);
                 empleado.Computadora.EstaBloqueada = agente.Bloqueado;
+                empleado.Computadora.SolicitudDesbloqueoPendiente = agente.SolicitudDesbloqueo;
+                empleado.Computadora.SolicitudDesbloqueoUtc = agente.SolicitudUtc;
             }
         }
     }

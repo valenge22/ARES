@@ -14,6 +14,8 @@ public sealed class AgentStatus : AgentHeartbeat
     public DateTimeOffset UltimaConexionUtc { get; set; }
     public bool EstaEnLinea { get; set; }
     public bool BloqueadoAdministrativamente { get; set; }
+    public bool SolicitudDesbloqueoPendiente { get; set; }
+    public DateTimeOffset? SolicitudDesbloqueoUtc { get; set; }
 }
 
 public sealed class HeartbeatResponse

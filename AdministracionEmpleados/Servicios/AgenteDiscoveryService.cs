@@ -3,7 +3,8 @@ using System.Net.Http.Json;
 
 namespace AdministracionEmpleados.Servicios;
 
-public sealed record AgenteDetectado(string Id, string Equipo, string Usuario, string DireccionIp, string Sistema, bool Bloqueado);
+public sealed record AgenteDetectado(string Id, string Equipo, string Usuario, string DireccionIp,
+    string Sistema, bool Bloqueado, bool SolicitudDesbloqueo, DateTimeOffset? SolicitudUtc);
 
 public sealed class AgenteDiscoveryService
 {
@@ -23,7 +24,8 @@ public sealed class AgenteDiscoveryService
 
         return (agentes ?? [])
             .Where(a => a.EstaEnLinea)
-            .Select(a => new AgenteDetectado(a.Id, a.Equipo, a.Usuario, "Remoto", a.Sistema, a.BloqueadoAdministrativamente))
+            .Select(a => new AgenteDetectado(a.Id, a.Equipo, a.Usuario, "Remoto", a.Sistema,
+                a.BloqueadoAdministrativamente, a.SolicitudDesbloqueoPendiente, a.SolicitudDesbloqueoUtc))
             .ToList();
     }
 

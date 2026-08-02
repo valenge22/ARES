@@ -181,6 +181,7 @@ namespace AdministracionEmpleados
             tabla.Columns.Add(new DataGridViewTextBoxColumn { Name = "Estado", HeaderText = "ESTADO", FillWeight = 95 });
             tabla.Columns.Add(new DataGridViewTextBoxColumn { Name = "Usuario", HeaderText = "USUARIO", FillWeight = 110 });
             tabla.Columns.Add(new DataGridViewTextBoxColumn { Name = "IP", HeaderText = "DIRECCIÓN IP", FillWeight = 100 });
+            tabla.Columns.Add(new DataGridViewTextBoxColumn { Name = "Solicitud", HeaderText = "SOLICITUD", FillWeight = 120 });
             tabla.Columns.Add(new DataGridViewButtonColumn { Name = "Ver", HeaderText = "", Text = "Ver", UseColumnTextForButtonValue = true, FillWeight = 55, FlatStyle = FlatStyle.Flat });
             tabla.Columns.Add(new DataGridViewButtonColumn { Name = "Accion", HeaderText = "ACCIÓN", FillWeight = 85, FlatStyle = FlatStyle.Flat });
 
@@ -190,11 +191,18 @@ namespace AdministracionEmpleados
                 string indicador = pc.EstaEncendida ? "●  " : "●  ";
                 int fila = tabla.Rows.Add(indicador + pc.Nombre,
                     pc.EstaBloqueada ? "Bloqueado" : "Desbloqueado",
-                    empleado.Nombre, pc.DireccionIP, "Ver",
+                    empleado.Nombre, pc.DireccionIP,
+                    pc.SolicitudDesbloqueoPendiente ? "🔔 Desbloqueo solicitado" : "—", "Ver",
                     pc.EstaBloqueada ? "Desbloquear" : "Bloquear");
                 tabla.Rows[fila].Tag = empleado;
                 tabla.Rows[fila].Cells[0].Style.ForeColor = pc.EstaEncendida
                     ? Color.FromArgb(22, 163, 74) : Color.FromArgb(220, 38, 38);
+                if (pc.SolicitudDesbloqueoPendiente)
+                {
+                    tabla.Rows[fila].Cells[4].Style.ForeColor = Color.FromArgb(234, 88, 12);
+                    tabla.Rows[fila].Cells[4].Style.Font = new Font("Segoe UI", 9F, FontStyle.Bold);
+                    tabla.Rows[fila].DefaultCellStyle.BackColor = Color.FromArgb(255, 247, 237);
+                }
             }
 
             tabla.CellContentClick += async (_, e) =>
@@ -329,6 +337,7 @@ namespace AdministracionEmpleados
             "AGENTE_CONECTADO" => "Agente conectado",
             "AGENTE_CERRADO" => "Programa cerrado",
             "AGENTE_DESCONECTADO" => "Conexión perdida",
+            "SOLICITUD_DESBLOQUEO" => "Solicitud de desbloqueo",
             _ => tipo
         };
 

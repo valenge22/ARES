@@ -60,6 +60,17 @@ public sealed class NetworkService : IDisposable
         catch { }
     }
 
+    public async Task<bool> SolicitarDesbloqueoAsync()
+    {
+        try
+        {
+            using HttpResponseMessage respuesta = await cliente.PostAsync(
+                $"{configuracion.ServerUrl.TrimEnd('/')}/api/agents/{agentId}/unlock-request", null);
+            return respuesta.IsSuccessStatusCode;
+        }
+        catch { return false; }
+    }
+
     private static string ObtenerIdEquipo()
     {
         string origen = $"{Environment.MachineName}|{Environment.UserDomainName}";

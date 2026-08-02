@@ -6,7 +6,8 @@ Este programa debe instalarse únicamente en equipos propios o con autorización
 INSTALACIÓN
 1. Descomprimí el archivo ZIP completo.
 2. Hacé doble clic en INSTALAR.bat.
-3. Ingresá la dirección HTTPS y la clave proporcionadas por el administrador.
+3. Ingresá la clave proporcionada por el administrador. La dirección del servidor
+   https://ares-3bic.onrender.com ya está configurada.
 4. Aceptá el permiso de administrador.
 5. El escudo de ARES aparecerá junto al reloj de Windows.
 

@@ -4,7 +4,7 @@ namespace AdministracionEmpleados;
 
 internal sealed class AresSettings
 {
-    public string ServerUrl { get; set; } = "http://localhost:5050";
+    public string ServerUrl { get; set; } = "https://ares-3bic.onrender.com";
     public string ApiKey { get; set; } = "CAMBIAR-ESTA-CLAVE";
 
     public static AresSettings Cargar()

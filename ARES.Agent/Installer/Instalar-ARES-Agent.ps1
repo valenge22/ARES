@@ -1,5 +1,5 @@
 param(
-    [string]$ServerUrl = 'http://localhost:5050',
+    [string]$ServerUrl = 'https://ares-3bic.onrender.com',
     [string]$ApiKey = 'CAMBIAR-ESTA-CLAVE'
 )
 

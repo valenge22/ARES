@@ -1,0 +1,23 @@
+ARES AGENT v1.0
+================
+
+Este programa debe instalarse únicamente en equipos propios o con autorización.
+
+INSTALACIÓN
+1. Descomprimí el archivo ZIP completo.
+2. Hacé doble clic en INSTALAR.bat.
+3. Ingresá la dirección HTTPS y la clave proporcionadas por el administrador.
+4. Aceptá el permiso de administrador.
+5. El escudo de ARES aparecerá junto al reloj de Windows.
+
+El instalador copia la aplicación en Archivos de programa y configura el inicio
+automático al ingresar a Windows. Sólo realiza conexiones HTTPS salientes: no abre
+puertos de entrada en la computadora monitoreada.
+Por seguridad operativa, el agente no puede cerrarse desde su ícono. Para retirarlo,
+un administrador debe ejecutar el desinstalador incluido.
+
+DESINSTALACIÓN
+Ejecutá DESINSTALAR.bat como administrador desde este mismo paquete.
+
+REQUISITOS
+Windows 10/11 de 64 bits. No necesita instalar .NET por separado.

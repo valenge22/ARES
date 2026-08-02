@@ -1,4 +1,6 @@
 <Solution>
   <Project Path="AdministracionEmpleados/AdministracionEmpleados.csproj" />
   <Project Path="ARES.Agent/ARES.Agent.csproj" />
+  <Project Path="ARES.Server/ARES.Server.csproj" />
+  <Project Path="ARES.Shared/ARES.Shared.csproj" />
 </Solution>

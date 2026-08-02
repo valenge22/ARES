@@ -1,0 +1,18 @@
+using System.Text.Json;
+
+namespace ARES.Agent;
+
+internal sealed class AgentSettings
+{
+    public string ServerUrl { get; set; } = "http://localhost:5050";
+    public string ApiKey { get; set; } = "CAMBIAR-ESTA-CLAVE";
+    public int HeartbeatSeconds { get; set; } = 10;
+
+    public static AgentSettings Cargar()
+    {
+        string ruta = Path.Combine(AppContext.BaseDirectory, "appsettings.json");
+        if (!File.Exists(ruta)) return new AgentSettings();
+        return JsonSerializer.Deserialize<AgentSettings>(File.ReadAllText(ruta),
+            new JsonSerializerOptions { PropertyNameCaseInsensitive = true }) ?? new AgentSettings();
+    }
+}

@@ -1,4 +1,4 @@
-﻿namespace AdministracionEmpleados.Modelos
+﻿namespace ARES.Shared.Modelos
 {
     public class Computadora
     {

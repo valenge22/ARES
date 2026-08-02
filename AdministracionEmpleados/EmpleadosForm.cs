@@ -1,4 +1,4 @@
-using AdministracionEmpleados.Modelos;
+using ARES.Shared.Modelos;
 using AdministracionEmpleados.Servicios;
 
 namespace AdministracionEmpleados

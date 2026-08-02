@@ -19,6 +19,8 @@ internal sealed class SessionRestrictionService
         if (string.IsNullOrWhiteSpace(settings.ManagedUser))
             return;
 
+        LockscreenBranding.GenerarYAplicar(settings);
+
         network.RestriccionCambiada += Aplicar;
         try
         {
@@ -40,6 +42,7 @@ internal sealed class SessionRestrictionService
 
         estadoAplicado = bloqueado;
         GuardarEstado(bloqueado);
+        LockscreenBranding.ConfigurarAviso(settings, bloqueado);
 
         if (bloqueado)
             DesconectarSesionesDelUsuario(settings.ManagedUser);

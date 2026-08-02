@@ -31,6 +31,7 @@ public sealed class NetworkService : IDisposable
                     Sistema = Environment.OSVersion.VersionString,
                     Version = typeof(NetworkService).Assembly.GetName().Version?.ToString(3) ?? "1.3.1",
                     BloqueadoLocalmente = LeerEstadoLocal()
+                    ,RequestToken = configuracion.RequestToken
                 };
 
                 using HttpResponseMessage respuesta = await cliente.PostAsJsonAsync(

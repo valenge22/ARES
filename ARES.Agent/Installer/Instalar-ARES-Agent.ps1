@@ -24,6 +24,16 @@ $destino = Join-Path $env:ProgramFiles 'ARES Agent'
 $origen = Join-Path $PSScriptRoot 'app'
 $rutaProteccion = Join-Path $env:ProgramData 'ARES\agent-uninstall.json'
 $proteccionIncluida = Join-Path $PSScriptRoot 'uninstall-protection.json'
+$tokenSolicitud = [Guid]::NewGuid().ToString('N')
+$configuracionAnterior = Join-Path $destino 'appsettings.json'
+if (Test-Path $configuracionAnterior) {
+    try {
+        $anterior = Get-Content -LiteralPath $configuracionAnterior -Raw | ConvertFrom-Json
+        if (-not [string]::IsNullOrWhiteSpace($anterior.RequestToken)) {
+            $tokenSolicitud = [string]$anterior.RequestToken
+        }
+    } catch { }
+}
 
 if (-not (Test-Path (Join-Path $origen 'ARES.Agent.exe'))) {
     throw 'No se encontró app\ARES.Agent.exe. Usá el paquete de distribución completo.'
@@ -68,6 +78,7 @@ Copy-Item -Path (Join-Path $origen '*') -Destination $destino -Recurse -Force
     ApiKey = $ApiKey
     HeartbeatSeconds = 10
     ManagedUser = $usuarioAdministrado
+    RequestToken = $tokenSolicitud
 } | ConvertTo-Json | Set-Content -Path (Join-Path $destino 'appsettings.json') -Encoding UTF8
 
 $ejecutable = Join-Path $destino 'ARES.Agent.exe'

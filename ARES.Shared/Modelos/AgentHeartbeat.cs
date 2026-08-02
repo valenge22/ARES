@@ -8,6 +8,7 @@ public class AgentHeartbeat
     public string Sistema { get; set; } = "";
     public string Version { get; set; } = "1.0";
     public bool BloqueadoLocalmente { get; set; }
+    public string RequestToken { get; set; } = "";
 }
 
 public sealed class AgentStatus : AgentHeartbeat

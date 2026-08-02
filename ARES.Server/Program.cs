@@ -1,5 +1,7 @@
 using ARES.Shared.Modelos;
 using System.Collections.Concurrent;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -15,6 +17,7 @@ Directory.CreateDirectory(Path.GetDirectoryName(dataPath)!);
 var agents = new ConcurrentDictionary<string, AgentStatus>(StringComparer.OrdinalIgnoreCase);
 var audit = new ConcurrentQueue<AgentAuditEvent>();
 var saveLock = new SemaphoreSlim(1, 1);
+var requestLimits = new ConcurrentDictionary<string, DateTimeOffset>(StringComparer.Ordinal);
 if (File.Exists(dataPath))
 {
     foreach (AgentStatus agent in JsonSerializer.Deserialize<List<AgentStatus>>(File.ReadAllText(dataPath)) ?? [])
@@ -29,6 +32,7 @@ if (File.Exists(auditPath))
 app.Use(async (context, next) =>
 {
     if (!context.Request.Path.StartsWithSegments("/health") &&
+        !context.Request.Path.StartsWithSegments("/solicitar") &&
         (!context.Request.Headers.TryGetValue("X-ARES-Key", out var supplied) || supplied != apiKey))
     {
         context.Response.StatusCode = StatusCodes.Status401Unauthorized;
@@ -61,6 +65,7 @@ app.MapPost("/api/agents/heartbeat", async (AgentHeartbeat heartbeat) =>
         BloqueadoAdministrativamente = anterior?.BloqueadoAdministrativamente ?? heartbeat.BloqueadoLocalmente,
         SolicitudDesbloqueoPendiente = anterior?.SolicitudDesbloqueoPendiente ?? false,
         SolicitudDesbloqueoUtc = anterior?.SolicitudDesbloqueoUtc
+        ,RequestToken = string.IsNullOrWhiteSpace(heartbeat.RequestToken) ? anterior?.RequestToken ?? "" : heartbeat.RequestToken
     };
     if (!estabaEnLinea)
         await RegistrarEventoAsync(heartbeat.Id, heartbeat.Equipo, "AGENTE_CONECTADO", "ARES Agent inició o recuperó la conexión.");
@@ -104,6 +109,42 @@ app.MapPost("/api/agents/{id}/unlock-request", async (string id) =>
         await GuardarAsync();
     }
     return Results.Ok(new { received = true, requestedAtUtc = agente.SolicitudDesbloqueoUtc });
+});
+
+app.MapGet("/solicitar/{token}", (string token) =>
+{
+    AgentStatus? agente = agents.Values.FirstOrDefault(a =>
+        !string.IsNullOrWhiteSpace(a.RequestToken) &&
+        a.RequestToken.Length == token.Length && CryptographicOperations.FixedTimeEquals(
+            Encoding.UTF8.GetBytes(a.RequestToken), Encoding.UTF8.GetBytes(token)));
+    if (agente is null) return Results.NotFound("Enlace de solicitud inválido.");
+    string equipo = System.Net.WebUtility.HtmlEncode(agente.Equipo);
+    string html = $$"""
+    <!doctype html><html lang="es"><meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>ARES · Solicitar desbloqueo</title><style>
+    body{margin:0;background:#0f172a;color:#fff;font:16px Segoe UI,Arial;display:grid;place-items:center;min-height:100vh}
+    main{width:min(420px,85vw);text-align:center;padding:32px;background:#172554;border-radius:20px}
+    h1{color:#38bdf8}button{border:0;border-radius:10px;padding:14px 22px;background:#2563eb;color:white;font-weight:700;font-size:16px}
+    </style><main><h1>ARES</h1><h2>{{equipo}}</h2><p>Enviá una solicitud al administrador para recuperar el acceso.</p>
+    <form method="post"><button type="submit">Solicitar desbloqueo</button></form></main></html>
+    """;
+    return Results.Content(html, "text/html; charset=utf-8");
+});
+
+app.MapPost("/solicitar/{token}", async (string token) =>
+{
+    AgentStatus? agente = agents.Values.FirstOrDefault(a => a.RequestToken == token);
+    if (agente is null) return Results.NotFound("Enlace de solicitud inválido.");
+    DateTimeOffset ahora = DateTimeOffset.UtcNow;
+    if (requestLimits.TryGetValue(token, out var ultima) && ahora - ultima < TimeSpan.FromMinutes(1))
+        return Results.Content("Solicitud ya enviada. Esperá la respuesta del administrador.", "text/plain; charset=utf-8");
+    requestLimits[token] = ahora;
+    agente.SolicitudDesbloqueoPendiente = true;
+    agente.SolicitudDesbloqueoUtc = ahora;
+    await RegistrarEventoAsync(agente.Id, agente.Equipo, "SOLICITUD_DESBLOQUEO",
+        "Solicitud enviada desde el portal móvil del equipo.");
+    await GuardarAsync();
+    return Results.Content("Solicitud enviada correctamente. El administrador ya fue notificado.", "text/plain; charset=utf-8");
 });
 
 app.MapPost("/api/agents/{id}/closed", async (string id) =>

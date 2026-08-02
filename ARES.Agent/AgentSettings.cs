@@ -8,6 +8,7 @@ internal sealed class AgentSettings
     public string ApiKey { get; set; } = "CAMBIAR-ESTA-CLAVE";
     public int HeartbeatSeconds { get; set; } = 10;
     public string ManagedUser { get; set; } = "";
+    public string RequestToken { get; set; } = "";
 
     public static AgentSettings Cargar()
     {

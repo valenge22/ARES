@@ -15,11 +15,11 @@ if (-not (Test-Path (Join-Path $origen 'ARES.Agent.exe'))) {
 
 $principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
 if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
-    Start-Process powershell.exe -Verb RunAs -Wait -ArgumentList @(
+    $procesoElevado = Start-Process powershell.exe -Verb RunAs -Wait -PassThru -ArgumentList @(
         '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', ('"' + $PSCommandPath + '"'),
         '-ServerUrl', ('"' + $ServerUrl + '"'), '-ApiKey', ('"' + $ApiKey + '"')
     )
-    exit
+    exit $procesoElevado.ExitCode
 }
 
 New-Item -ItemType Directory -Path $destino -Force | Out-Null

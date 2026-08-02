@@ -7,6 +7,7 @@ trap {
     exit 1
 }
 $nombreTarea = 'ARES Agent'
+$nombreTareaServicio = 'ARES Agent Service'
 $destino = Join-Path $env:ProgramFiles 'ARES Agent'
 $rutaProteccion = Join-Path $env:ProgramData 'ARES\agent-uninstall.json'
 
@@ -50,6 +51,17 @@ finally { $passwordPlano = $null }
 
 Get-Process -Name 'ARES.Agent' -ErrorAction SilentlyContinue | Stop-Process -Force
 Unregister-ScheduledTask -TaskName $nombreTarea -Confirm:$false -ErrorAction SilentlyContinue
+Unregister-ScheduledTask -TaskName $nombreTareaServicio -Confirm:$false -ErrorAction SilentlyContinue
+$configuracionAgente = Join-Path $destino 'appsettings.json'
+if (Test-Path $configuracionAgente) {
+    $configuracion = Get-Content -LiteralPath $configuracionAgente -Raw | ConvertFrom-Json
+    if (-not [string]::IsNullOrWhiteSpace($configuracion.ManagedUser)) {
+        & (Join-Path $env:SystemRoot 'System32\net.exe') user ([string]$configuracion.ManagedUser) /active:yes | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+            throw "No se pudo volver a habilitar la cuenta '$($configuracion.ManagedUser)'. No se desinstaló ARES."
+        }
+    }
+}
 if (Test-Path $destino) { Remove-Item -LiteralPath $destino -Recurse -Force }
 if (Test-Path $rutaProteccion) { Remove-Item -LiteralPath $rutaProteccion -Force }
 Set-Content -LiteralPath $LogPath -Value "Desinstalación completada el $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')." -Encoding UTF8

@@ -25,9 +25,12 @@ public sealed class NetworkService : IDisposable
                 {
                     Id = agentId,
                     Equipo = Environment.MachineName,
-                    Usuario = Environment.UserName,
+                    Usuario = string.IsNullOrWhiteSpace(configuracion.ManagedUser)
+                        ? Environment.UserName
+                        : configuracion.ManagedUser,
                     Sistema = Environment.OSVersion.VersionString,
-                    Version = "1.0"
+                    Version = "1.1",
+                    BloqueadoLocalmente = LeerEstadoLocal()
                 };
 
                 using HttpResponseMessage respuesta = await cliente.PostAsJsonAsync(
@@ -76,6 +79,19 @@ public sealed class NetworkService : IDisposable
         string origen = $"{Environment.MachineName}|{Environment.UserDomainName}";
         byte[] hash = SHA256.HashData(Encoding.UTF8.GetBytes(origen));
         return Convert.ToHexString(hash)[..24];
+    }
+
+    private static bool LeerEstadoLocal()
+    {
+        try
+        {
+            string ruta = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
+                "ARES", "restriction.state");
+            return File.Exists(ruta) &&
+                   File.ReadAllText(ruta).Trim().Equals("blocked", StringComparison.OrdinalIgnoreCase);
+        }
+        catch { return false; }
     }
 
     public void Dispose() => cliente.Dispose();

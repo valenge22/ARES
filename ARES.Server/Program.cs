@@ -56,7 +56,9 @@ app.MapPost("/api/agents/heartbeat", async (AgentHeartbeat heartbeat) =>
         Version = heartbeat.Version,
         UltimaConexionUtc = DateTimeOffset.UtcNow,
         EstaEnLinea = true,
-        BloqueadoAdministrativamente = anterior?.BloqueadoAdministrativamente ?? false,
+        // Si Render reinicio sin almacenamiento persistente, el agente conserva el
+        // bloqueo local y lo vuelve a registrar para evitar un desbloqueo accidental.
+        BloqueadoAdministrativamente = anterior?.BloqueadoAdministrativamente ?? heartbeat.BloqueadoLocalmente,
         SolicitudDesbloqueoPendiente = anterior?.SolicitudDesbloqueoPendiente ?? false,
         SolicitudDesbloqueoUtc = anterior?.SolicitudDesbloqueoUtc
     };

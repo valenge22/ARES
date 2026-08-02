@@ -7,6 +7,7 @@ internal sealed class AgentSettings
     public string ServerUrl { get; set; } = "https://ares-3bic.onrender.com";
     public string ApiKey { get; set; } = "CAMBIAR-ESTA-CLAVE";
     public int HeartbeatSeconds { get; set; } = 10;
+    public string ManagedUser { get; set; } = "";
 
     public static AgentSettings Cargar()
     {

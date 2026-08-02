@@ -10,6 +10,7 @@ internal sealed class AgentApplicationContext : ApplicationContext
     private readonly CancellationTokenSource cancelacion = new();
     private readonly SynchronizationContext contextoUi;
     private readonly List<RestrictionForm> restricciones = [];
+    private readonly System.Windows.Forms.Timer monitorEstadoLocal;
 
     public AgentApplicationContext()
     {
@@ -28,6 +29,10 @@ internal sealed class AgentApplicationContext : ApplicationContext
         };
         icono.DoubleClick += MostrarInformacion;
         icono.ShowBalloonTip(3000, "ARES Agent", "El agente está iniciando y permanecerá visible en el área de notificación.", ToolTipIcon.Info);
+
+        monitorEstadoLocal = new System.Windows.Forms.Timer { Interval = 1000 };
+        monitorEstadoLocal.Tick += (_, _) => AplicarRestriccion(LeerEstadoLocal());
+        monitorEstadoLocal.Start();
 
         _ = EjecutarServidorAsync();
     }
@@ -84,6 +89,19 @@ internal sealed class AgentApplicationContext : ApplicationContext
         icono.ContextMenuStrip!.Items[0].Text = estado;
     }
 
+    private static bool LeerEstadoLocal()
+    {
+        try
+        {
+            string ruta = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
+                "ARES", "restriction.state");
+            return File.Exists(ruta) &&
+                   File.ReadAllText(ruta).Trim().Equals("blocked", StringComparison.OrdinalIgnoreCase);
+        }
+        catch { return false; }
+    }
+
     private void MostrarInformacion(object? sender, EventArgs e)
     {
         MessageBox.Show(
@@ -99,6 +117,8 @@ internal sealed class AgentApplicationContext : ApplicationContext
             foreach (RestrictionForm formulario in restricciones.ToArray())
                 formulario.RetirarRestriccion();
             cancelacion.Cancel();
+            monitorEstadoLocal.Stop();
+            monitorEstadoLocal.Dispose();
             cancelacion.Dispose();
             network.Dispose();
             icono.Dispose();

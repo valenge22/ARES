@@ -8,7 +8,7 @@
     <AssemblyName>ARES.Agent</AssemblyName>
     <Product>ARES Agent</Product>
     <Description>Agente visible de administración para equipos autorizados.</Description>
-    <Version>1.3.2</Version>
+    <Version>1.3.3</Version>
   </PropertyGroup>
 
   <ItemGroup>

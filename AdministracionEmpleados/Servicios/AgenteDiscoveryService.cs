@@ -50,4 +50,14 @@ public sealed class AgenteDiscoveryService
         return await cliente.GetFromJsonAsync<List<AgentAuditEvent>>(
             $"{configuracion.ServerUrl.TrimEnd('/')}/api/audit", cancelacion) ?? [];
     }
+
+    public async Task BorrarEquiposAsync(CancellationToken cancelacion = default)
+    {
+        AresSettings configuracion = AresSettings.Cargar();
+        using var cliente = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
+        cliente.DefaultRequestHeaders.Add("X-ARES-Key", configuracion.ApiKey);
+        using HttpResponseMessage respuesta = await cliente.DeleteAsync(
+            $"{configuracion.ServerUrl.TrimEnd('/')}/api/agents", cancelacion);
+        respuesta.EnsureSuccessStatusCode();
+    }
 }

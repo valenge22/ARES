@@ -129,7 +129,31 @@ namespace AdministracionEmpleados
                 actualizar.Text = "Actualizando…";
                 await BuscarEquiposAsync();
             };
+            var borrar = new Button
+            {
+                Text = "Borrar lista",
+                Dock = DockStyle.Right,
+                Width = 120,
+                FlatStyle = FlatStyle.Flat,
+                BackColor = Color.FromArgb(220, 38, 38),
+                ForeColor = Color.White,
+                Font = new Font("Segoe UI", 9F, FontStyle.Bold),
+                Cursor = Cursors.Hand,
+                Margin = new Padding(0, 18, 8, 18)
+            };
+            borrar.FlatAppearance.BorderSize = 0;
+            borrar.Click += async (_, _) =>
+            {
+                if (MessageBox.Show(
+                    "¿Borrar todos los equipos registrados?\n\nLos agentes conectados volverán a aparecer automáticamente. Los registros se conservarán.",
+                    "ARES", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes) return;
+                borrar.Enabled = false;
+                try { await discoveryService.BorrarEquiposAsync(); await BuscarEquiposAsync(); }
+                catch (Exception ex) { MessageBox.Show($"No se pudo borrar la lista.\n\n{ex.Message}", "ARES", MessageBoxButtons.OK, MessageBoxIcon.Error); }
+                finally { borrar.Enabled = true; }
+            };
             encabezado.Padding = new Padding(22, 13, 18, 13);
+            encabezado.Controls.Add(borrar);
             encabezado.Controls.Add(actualizar);
             var tabla = CrearTablaEquipos();
             tabla.Dock = DockStyle.Fill;

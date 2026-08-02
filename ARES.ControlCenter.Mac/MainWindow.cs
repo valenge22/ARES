@@ -32,9 +32,17 @@ public sealed class MainWindow : Window
 
         var refresh = new Button { Content = "↻ Actualizar", Padding = new Thickness(18, 9), Background = Brush.Parse("#2563EB"), Foreground = Brushes.White };
         refresh.Click += async (_, _) => await ShowAgentsAsync();
+        var clear = new Button { Content = "Borrar lista", Padding = new Thickness(18, 9), Background = Brush.Parse("#DC2626"), Foreground = Brushes.White };
+        clear.Click += async (_, _) =>
+        {
+            if (!await ConfirmClearAsync()) return;
+            try { await api.ClearAgentsAsync(); await ShowAgentsAsync(); }
+            catch (Exception ex) { status.Text = $"Error: {ex.Message}"; }
+        };
+        var headerActions = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Children = { clear, refresh } };
         var header = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto"), Margin = new Thickness(0, 0, 0, 16) };
         header.Children.Add(new StackPanel { Children = { title, status } });
-        Grid.SetColumn(refresh, 1); header.Children.Add(refresh);
+        Grid.SetColumn(headerActions, 1); header.Children.Add(headerActions);
 
         var main = new Grid { RowDefinitions = new RowDefinitions("Auto,*"), Margin = new Thickness(28) };
         main.Children.Add(header);
@@ -105,5 +113,21 @@ public sealed class MainWindow : Window
         dialog.Content = new StackPanel { Margin = new Thickness(24), Spacing = 12, Children = { new TextBlock { Text = "Dirección del servidor" }, url, new TextBlock { Text = "Clave ARES" }, key, save } };
         save.Click += (_, _) => { settings.ServerUrl = url.Text?.Trim() ?? ""; settings.ApiKey = key.Text ?? ""; settings.Save(); api.Update(settings); dialog.Close(); };
         await dialog.ShowDialog(this); await ShowAgentsAsync();
+    }
+
+    private async Task<bool> ConfirmClearAsync()
+    {
+        bool confirmed = false;
+        var cancel = new Button { Content = "Cancelar", Padding = new Thickness(16, 8) };
+        var accept = new Button { Content = "Borrar equipos", Padding = new Thickness(16, 8), Background = Brush.Parse("#DC2626"), Foreground = Brushes.White };
+        var dialog = new Window { Title = "Confirmar limpieza", Width = 460, Height = 220, WindowStartupLocation = WindowStartupLocation.CenterOwner };
+        dialog.Content = new StackPanel { Margin = new Thickness(24), Spacing = 16, Children = {
+            new TextBlock { Text = "¿Borrar todos los equipos registrados?", FontSize = 19, FontWeight = FontWeight.Bold },
+            new TextBlock { Text = "Los agentes conectados volverán a aparecer automáticamente. Los registros se conservarán.", TextWrapping = TextWrapping.Wrap },
+            new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Spacing = 8, Children = { cancel, accept } }
+        }};
+        cancel.Click += (_, _) => dialog.Close();
+        accept.Click += (_, _) => { confirmed = true; dialog.Close(); };
+        await dialog.ShowDialog(this); return confirmed;
     }
 }

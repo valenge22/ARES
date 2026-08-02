@@ -37,4 +37,10 @@ internal sealed class AresApiClient
         response.EnsureSuccessStatusCode();
         return await response.Content.ReadFromJsonAsync<List<AgentAuditEvent>>() ?? [];
     }
+    public async Task ClearAgentsAsync()
+    {
+        using var request = Request(HttpMethod.Delete, "/api/agents");
+        using var response = await http.SendAsync(request);
+        response.EnsureSuccessStatusCode();
+    }
 }

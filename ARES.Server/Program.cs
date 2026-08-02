@@ -174,6 +174,16 @@ app.MapGet("/api/agents", () =>
         .OrderBy(a => a.Equipo);
 });
 
+app.MapDelete("/api/agents", async () =>
+{
+    int eliminados = agents.Count;
+    agents.Clear();
+    await RegistrarEventoAsync("SERVER", "Servidor ARES", "LISTA_EQUIPOS_LIMPIADA",
+        $"Se eliminaron {eliminados} equipos registrados. Los agentes conectados volverán a registrarse automáticamente.");
+    await GuardarAsync();
+    return Results.Ok(new { deleted = eliminados });
+});
+
 _ = MonitorOfflineAsync(app.Lifetime.ApplicationStopping);
 app.Run();
 

@@ -23,6 +23,8 @@ jobs:
 
       - name: Crear paquete autónomo
         shell: powershell
+        env:
+          ARES_UNINSTALL_PASSWORD: ${{ secrets.ARES_UNINSTALL_PASSWORD }}
         run: .\Crear-Paquete-Agente.ps1
 
       - name: Publicar artefacto del workflow

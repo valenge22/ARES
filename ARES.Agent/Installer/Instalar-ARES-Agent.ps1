@@ -21,6 +21,7 @@ $nombreTarea = 'ARES Agent'
 $destino = Join-Path $env:ProgramFiles 'ARES Agent'
 $origen = Join-Path $PSScriptRoot 'app'
 $rutaProteccion = Join-Path $env:ProgramData 'ARES\agent-uninstall.json'
+$proteccionIncluida = Join-Path $PSScriptRoot 'uninstall-protection.json'
 
 if (-not (Test-Path (Join-Path $origen 'ARES.Agent.exe'))) {
     throw 'No se encontró app\ARES.Agent.exe. Usá el paquete de distribución completo.'
@@ -36,45 +37,11 @@ if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administra
     exit $procesoElevado.ExitCode
 }
 
-function Convertir-SecureString([Security.SecureString]$valor) {
-    $puntero = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($valor)
-    try { return [Runtime.InteropServices.Marshal]::PtrToStringBSTR($puntero) }
-    finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($puntero) }
+if (-not (Test-Path $proteccionIncluida)) {
+    throw 'El paquete no contiene la protección administrativa de desinstalación.'
 }
-
-Write-Host ''
-Write-Host 'Configurá una contraseña exclusiva para desinstalar ARES Agent.' -ForegroundColor Cyan
-$passwordSeguro = Read-Host 'Contraseña de desinstalación' -AsSecureString
-$confirmacionSegura = Read-Host 'Repetí la contraseña' -AsSecureString
-$passwordPlano = Convertir-SecureString $passwordSeguro
-$confirmacionPlana = Convertir-SecureString $confirmacionSegura
-try {
-    if ([string]::IsNullOrWhiteSpace($passwordPlano) -or $passwordPlano.Length -lt 8) {
-        throw 'La contraseña de desinstalación debe tener al menos 8 caracteres.'
-    }
-    if ($passwordPlano -cne $confirmacionPlana) {
-        throw 'Las contraseñas de desinstalación no coinciden.'
-    }
-
-    $iteraciones = 200000
-    $sal = New-Object byte[] 32
-    [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($sal)
-    $derivador = New-Object Security.Cryptography.Rfc2898DeriveBytes(
-        $passwordPlano, $sal, $iteraciones, [Security.Cryptography.HashAlgorithmName]::SHA256)
-    $hash = $derivador.GetBytes(32)
-    $derivador.Dispose()
-
-    New-Item -ItemType Directory -Path (Split-Path $rutaProteccion) -Force | Out-Null
-    @{
-        Salt = [Convert]::ToBase64String($sal)
-        Hash = [Convert]::ToBase64String($hash)
-        Iterations = $iteraciones
-    } | ConvertTo-Json | Set-Content -LiteralPath $rutaProteccion -Encoding UTF8
-}
-finally {
-    $passwordPlano = $null
-    $confirmacionPlana = $null
-}
+New-Item -ItemType Directory -Path (Split-Path $rutaProteccion) -Force | Out-Null
+Copy-Item -LiteralPath $proteccionIncluida -Destination $rutaProteccion -Force
 
 New-Item -ItemType Directory -Path $destino -Force | Out-Null
 

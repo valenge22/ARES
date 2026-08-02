@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="AdministracionEmpleados/AdministracionEmpleados.csproj" />
+  <Project Path="ARES.Agent/ARES.Agent.csproj" />
+</Solution>

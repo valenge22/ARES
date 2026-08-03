@@ -49,25 +49,31 @@ app.MapPost("/api/agents/heartbeat", async (AgentHeartbeat heartbeat) =>
     if (string.IsNullOrWhiteSpace(heartbeat.Id) || string.IsNullOrWhiteSpace(heartbeat.Equipo))
         return Results.BadRequest(new { error = "Identidad de agente incompleta." });
 
-    bool existia = agents.TryGetValue(heartbeat.Id, out AgentStatus? anterior);
-    bool estabaEnLinea = existia && anterior!.EstaEnLinea;
-    agents[heartbeat.Id] = new AgentStatus
-    {
-        Id = heartbeat.Id,
-        Equipo = heartbeat.Equipo,
-        Usuario = heartbeat.Usuario,
-        Sistema = heartbeat.Sistema,
-        Version = heartbeat.Version,
-        UltimaConexionUtc = DateTimeOffset.UtcNow,
-        EstaEnLinea = true,
-        // Si Render reinicio sin almacenamiento persistente, el agente conserva el
-        // bloqueo local y lo vuelve a registrar para evitar un desbloqueo accidental.
-        BloqueadoAdministrativamente = anterior?.BloqueadoAdministrativamente ?? heartbeat.BloqueadoLocalmente,
-        SolicitudDesbloqueoPendiente = anterior?.SolicitudDesbloqueoPendiente ?? false,
-        SolicitudDesbloqueoUtc = anterior?.SolicitudDesbloqueoUtc
-        ,RequestToken = string.IsNullOrWhiteSpace(heartbeat.RequestToken) ? anterior?.RequestToken ?? "" : heartbeat.RequestToken,
-        NombrePersonalizado = anterior?.NombrePersonalizado ?? ""
-    };
+    bool estabaEnLinea = agents.TryGetValue(heartbeat.Id, out AgentStatus? anterior) && anterior.EstaEnLinea;
+    DateTimeOffset ahora = DateTimeOffset.UtcNow;
+    AgentStatus agenteActual = agents.AddOrUpdate(heartbeat.Id,
+        _ => new AgentStatus
+        {
+            Id = heartbeat.Id, Equipo = heartbeat.Equipo, Usuario = heartbeat.Usuario,
+            Sistema = heartbeat.Sistema, Version = heartbeat.Version,
+            UltimaConexionUtc = ahora, EstaEnLinea = true,
+            BloqueadoAdministrativamente = heartbeat.BloqueadoLocalmente,
+            RequestToken = heartbeat.RequestToken
+        },
+        (_, existente) =>
+        {
+            // Se actualiza el mismo objeto para no sobrescribir una solicitud,
+            // un bloqueo o un alias modificados por otra petición concurrente.
+            existente.Equipo = heartbeat.Equipo;
+            existente.Usuario = heartbeat.Usuario;
+            existente.Sistema = heartbeat.Sistema;
+            existente.Version = heartbeat.Version;
+            existente.UltimaConexionUtc = ahora;
+            existente.EstaEnLinea = true;
+            if (!string.IsNullOrWhiteSpace(heartbeat.RequestToken))
+                existente.RequestToken = heartbeat.RequestToken;
+            return existente;
+        });
     if (!estabaEnLinea)
         await RegistrarEventoAsync(heartbeat.Id, heartbeat.Equipo, "AGENTE_CONECTADO", "ARES Agent inició o recuperó la conexión.");
     await GuardarAsync();
@@ -75,7 +81,7 @@ app.MapPost("/api/agents/heartbeat", async (AgentHeartbeat heartbeat) =>
     {
         Accepted = true,
         ServerTimeUtc = DateTimeOffset.UtcNow,
-        BloqueadoAdministrativamente = agents[heartbeat.Id].BloqueadoAdministrativamente
+        BloqueadoAdministrativamente = agenteActual.BloqueadoAdministrativamente
     });
 });
 

@@ -2,6 +2,7 @@ using ARES.Shared.Modelos;
 using System.Net.Http.Json;
 using System.Security.Cryptography;
 using System.Text;
+using Microsoft.Win32;
 
 namespace ARES.Agent.Servicios;
 
@@ -77,7 +78,14 @@ public sealed class NetworkService : IDisposable
 
     private static string ObtenerIdEquipo()
     {
-        string origen = $"{Environment.MachineName}|{Environment.UserDomainName}";
+        // MachineGuid es estable e idéntico para SYSTEM y para el usuario interactivo.
+        // UserDomainName producía dos IDs para una misma PC y dividía su estado remoto.
+        string machineGuid = Registry.GetValue(
+            @"HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Cryptography",
+            "MachineGuid", "")?.ToString() ?? "";
+        string origen = string.IsNullOrWhiteSpace(machineGuid)
+            ? Environment.MachineName
+            : machineGuid;
         byte[] hash = SHA256.HashData(Encoding.UTF8.GetBytes(origen));
         return Convert.ToHexString(hash)[..24];
     }

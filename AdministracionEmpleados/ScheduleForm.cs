@@ -68,7 +68,7 @@ internal sealed class ScheduleForm : Form
             foreach (ImportedShift shift in shifts)
             {
                 Empleado? employee = FindEmployee(shift.Employee);
-                int rowIndex = grid.Rows.Add(shift.Employee, employee?.Computadora.Nombre ?? "", shift.Date.ToString("dd/MM/yyyy"), shift.Start.ToString("HH:mm"), shift.End.ToString("HH:mm"));
+                int rowIndex = grid.Rows.Add(shift.Employee, employee?.Computadora.Nombre ?? "", shift.Date.ToString("dd/MM/yyyy"), shift.Start.ToString(@"hh\:mm"), shift.End.ToString(@"hh\:mm"));
                 if (employee is null) grid.Rows[rowIndex].DefaultCellStyle.BackColor = Color.MistyRose;
             }
             status.Text = $"{shifts.Count} turnos importados. Revisalos y publicá los cambios.";

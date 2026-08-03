@@ -49,6 +49,7 @@ namespace AdministracionEmpleados.Servicios
                 }
 
                 empleado.Nombre = agente.Usuario;
+                empleado.Grupo = string.IsNullOrWhiteSpace(agente.Grupo) ? "Grupo 1" : agente.Grupo;
                 empleado.Computadora.AgentId = agente.Id;
                 empleado.Computadora.Nombre = agente.Equipo;
                 empleado.Computadora.DireccionIP = agente.DireccionIp;

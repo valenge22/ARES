@@ -207,6 +207,8 @@ namespace AdministracionEmpleados
             tabla.Columns.Add(new DataGridViewTextBoxColumn { Name = "Usuario", HeaderText = "USUARIO", FillWeight = 110 });
             tabla.Columns.Add(new DataGridViewTextBoxColumn { Name = "IP", HeaderText = "DIRECCIÓN IP", FillWeight = 100 });
             tabla.Columns.Add(new DataGridViewTextBoxColumn { Name = "Solicitud", HeaderText = "SOLICITUD", FillWeight = 120 });
+            tabla.Columns.Add(new DataGridViewTextBoxColumn { Name = "Grupo", HeaderText = "GRUPO", FillWeight = 70 });
+            tabla.Columns.Add(new DataGridViewButtonColumn { Name = "CambiarGrupo", HeaderText = "", Text = "Mover", UseColumnTextForButtonValue = true, FillWeight = 55, FlatStyle = FlatStyle.Flat });
             tabla.Columns.Add(new DataGridViewButtonColumn { Name = "Renombrar", HeaderText = "", Text = "Cambiar nombre", UseColumnTextForButtonValue = true, FillWeight = 85, FlatStyle = FlatStyle.Flat });
             tabla.Columns.Add(new DataGridViewButtonColumn { Name = "Ver", HeaderText = "", Text = "Ver", UseColumnTextForButtonValue = true, FillWeight = 55, FlatStyle = FlatStyle.Flat });
             tabla.Columns.Add(new DataGridViewButtonColumn { Name = "Accion", HeaderText = "ACCIÓN", FillWeight = 85, FlatStyle = FlatStyle.Flat });
@@ -218,7 +220,7 @@ namespace AdministracionEmpleados
                 int fila = tabla.Rows.Add(indicador + pc.Nombre,
                     pc.EstaBloqueada ? "Bloqueado" : "Desbloqueado",
                     empleado.Nombre, pc.DireccionIP,
-                    pc.SolicitudDesbloqueoPendiente ? "🔔 Desbloqueo solicitado" : "—", "Cambiar nombre", "Ver",
+                    pc.SolicitudDesbloqueoPendiente ? "🔔 Desbloqueo solicitado" : "—", empleado.Grupo, "Mover", "Cambiar nombre", "Ver",
                     pc.EstaBloqueada ? "Desbloquear" : "Bloquear");
                 tabla.Rows[fila].Tag = empleado;
                 tabla.Rows[fila].Cells[0].Style.ForeColor = pc.EstaEncendida
@@ -240,6 +242,13 @@ namespace AdministracionEmpleados
                     if (string.IsNullOrWhiteSpace(nombre)) return;
                     try { await discoveryService.RenombrarEquipoAsync(empleado.Computadora.AgentId, nombre.Trim()); await BuscarEquiposAsync(); }
                     catch (Exception ex) { MessageBox.Show($"No se pudo cambiar el nombre.\n\n{ex.Message}", "ARES", MessageBoxButtons.OK, MessageBoxIcon.Error); }
+                }
+                else if (tabla.Columns[e.ColumnIndex].Name == "CambiarGrupo")
+                {
+                    string? grupo = PedirGrupo(empleado.Grupo);
+                    if (grupo is null) return;
+                    try { await discoveryService.EstablecerGrupoAsync(empleado.Computadora.AgentId, grupo); await BuscarEquiposAsync(); }
+                    catch (Exception ex) { MessageBox.Show($"No se pudo cambiar el grupo.\n\n{ex.Message}", "ARES", MessageBoxButtons.OK, MessageBoxIcon.Error); }
                 }
                 else if (tabla.Columns[e.ColumnIndex].Name == "Ver")
                 {
@@ -291,17 +300,30 @@ namespace AdministracionEmpleados
             return dialogo.ShowDialog() == DialogResult.OK ? texto.Text : null;
         }
 
+        private static string? PedirGrupo(string actual)
+        {
+            using var dialogo = new Form { Text = "Mover a carpeta", Width = 380, Height = 175, StartPosition = FormStartPosition.CenterParent, FormBorderStyle = FormBorderStyle.FixedDialog };
+            var lista = new ComboBox { Left = 20, Top = 42, Width = 325, DropDownStyle = ComboBoxStyle.DropDownList };
+            lista.Items.AddRange(["Grupo 1", "Grupo 2", "Grupo 3"]); lista.SelectedItem = actual; if (lista.SelectedIndex < 0) lista.SelectedIndex = 0;
+            var guardar = new Button { Text = "Mover", Left = 245, Top = 82, Width = 100, DialogResult = DialogResult.OK };
+            dialogo.Controls.AddRange([new Label { Text = "Carpeta del empleado y equipo", Left = 20, Top = 18, AutoSize = true }, lista, guardar]); dialogo.AcceptButton = guardar;
+            return dialogo.ShowDialog() == DialogResult.OK ? lista.SelectedItem?.ToString() : null;
+        }
+
         private Control CrearVistaEmpleados()
         {
             var tarjeta = CrearTarjeta();
             var tabla = CrearListaSimple(
-                new[] { "EMPLEADO", "EQUIPO ASIGNADO", "SESIÓN", "ARES AGENT", "SISTEMA" },
+                new[] { "CARPETA", "EMPLEADO", "EQUIPO ASIGNADO", "SESIÓN", "ARES AGENT", "SISTEMA" },
                 empleadoService.ObtenerEmpleados().Select(e => new[] {
-                    e.Nombre, e.Computadora.Nombre,
+                    e.Grupo, e.Nombre, e.Computadora.Nombre,
                     e.Computadora.EstaLogueada ? "Iniciada" : "Sin iniciar",
                     "●  Verificando…", e.Computadora.SistemaOperativo }).ToList());
             tarjeta.Controls.Add(tabla);
-            tarjeta.Controls.Add(CrearEncabezadoTarjeta("Directorio de empleados", "Asignaciones activas dentro de la organización"));
+            var encabezado = CrearEncabezadoTarjeta("Directorio de empleados", "Carpetas y asignaciones activas dentro de la organización");
+            var horarios = new Button { Text = "📅 Horarios", Dock = DockStyle.Right, Width = 130, FlatStyle = FlatStyle.Flat, BackColor = Color.FromArgb(37, 99, 235), ForeColor = Color.White };
+            horarios.FlatAppearance.BorderSize = 0; horarios.Click += (_, _) => new ScheduleForm(discoveryService, empleadoService.ObtenerEmpleados()).ShowDialog(this);
+            encabezado.Controls.Add(horarios); tarjeta.Controls.Add(encabezado);
             _ = ActualizarEstadoAgentesAsync(tabla);
             return tarjeta;
         }
@@ -314,7 +336,7 @@ namespace AdministracionEmpleados
             for (int i = 0; i < empleados.Count && i < tabla.Rows.Count; i++)
             {
                 bool activo = empleados[i].Computadora.EstaEncendida;
-                DataGridViewCell celda = tabla.Rows[i].Cells[3];
+                DataGridViewCell celda = tabla.Rows[i].Cells[4];
                 celda.Value = activo ? "●  Activo" : "●  Inactivo";
                 celda.Style.ForeColor = activo
                     ? Color.FromArgb(22, 163, 74)

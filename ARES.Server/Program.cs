@@ -12,12 +12,16 @@ string apiKey = builder.Configuration["ARES_API_KEY"]
     ?? "CAMBIAR-ESTA-CLAVE";
 string dataPath = Path.Combine(AppContext.BaseDirectory, "data", "agents.json");
 string auditPath = Path.Combine(AppContext.BaseDirectory, "data", "audit.json");
+string schedulePath = Path.Combine(AppContext.BaseDirectory, "data", "schedule.json");
 Directory.CreateDirectory(Path.GetDirectoryName(dataPath)!);
 
 var agents = new ConcurrentDictionary<string, AgentStatus>(StringComparer.OrdinalIgnoreCase);
 var audit = new ConcurrentQueue<AgentAuditEvent>();
 var saveLock = new SemaphoreSlim(1, 1);
 var requestLimits = new ConcurrentDictionary<string, DateTimeOffset>(StringComparer.Ordinal);
+ScheduleState schedule = File.Exists(schedulePath)
+    ? JsonSerializer.Deserialize<ScheduleState>(File.ReadAllText(schedulePath)) ?? new()
+    : new();
 if (File.Exists(dataPath))
 {
     foreach (AgentStatus agent in JsonSerializer.Deserialize<List<AgentStatus>>(File.ReadAllText(dataPath)) ?? [])
@@ -57,7 +61,9 @@ app.MapPost("/api/agents/heartbeat", async (AgentHeartbeat heartbeat) =>
             Id = heartbeat.Id, Equipo = heartbeat.Equipo, Usuario = heartbeat.Usuario,
             Sistema = heartbeat.Sistema, Version = heartbeat.Version,
             UltimaConexionUtc = ahora, EstaEnLinea = true,
-            BloqueadoAdministrativamente = heartbeat.BloqueadoLocalmente,
+            // El estado local puede provenir del horario cacheado; no debe convertirse
+            // en un bloqueo manual permanente cuando el servidor pierde su almacenamiento.
+            BloqueadoAdministrativamente = false,
             RequestToken = heartbeat.RequestToken
         },
         (_, existente) =>
@@ -82,7 +88,40 @@ app.MapPost("/api/agents/heartbeat", async (AgentHeartbeat heartbeat) =>
         Accepted = true,
         ServerTimeUtc = DateTimeOffset.UtcNow,
         BloqueadoAdministrativamente = agenteActual.BloqueadoAdministrativamente
+        ,HorarioVersion = schedule.Version
+        ,Horarios = schedule.Horarios.Where(h => h.AgentId.Equals(heartbeat.Id, StringComparison.OrdinalIgnoreCase)).ToList()
     });
+});
+
+app.MapPut("/api/agents/{id}/group", async (string id, GroupRequest request) =>
+{
+    if (!agents.TryGetValue(id, out AgentStatus? agente)) return Results.NotFound();
+    string[] validos = ["Grupo 1", "Grupo 2", "Grupo 3"];
+    if (!validos.Contains(request.Grupo)) return Results.BadRequest(new { error = "Grupo invalido." });
+    agente.Grupo = request.Grupo;
+    await GuardarAsync();
+    return Results.Ok(new { updated = true });
+});
+
+app.MapGet("/api/schedule", () => schedule);
+
+app.MapPut("/api/schedule", async (SchedulePublication publication) =>
+{
+    if (publication.Mes is < 1 or > 12 || publication.Anio is < 2020 or > 2200)
+        return Results.BadRequest(new { error = "Mes o anio invalido." });
+    if (publication.Horarios.Any(h => h.FinUtc <= h.InicioUtc || string.IsNullOrWhiteSpace(h.AgentId)))
+        return Results.BadRequest(new { error = "Hay turnos invalidos o sin equipo asignado." });
+    schedule = new ScheduleState
+    {
+        Mes = publication.Mes, Anio = publication.Anio,
+        ZonaHoraria = "America/Argentina/Buenos_Aires",
+        Horarios = publication.Horarios, Version = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+        PublicadoUtc = DateTimeOffset.UtcNow
+    };
+    await File.WriteAllTextAsync(schedulePath, JsonSerializer.Serialize(schedule, new JsonSerializerOptions { WriteIndented = true }));
+    await RegistrarEventoAsync("SERVER", "Servidor ARES", "HORARIOS_PUBLICADOS",
+        $"Se publicaron {schedule.Horarios.Count} turnos para {schedule.Mes:00}/{schedule.Anio}.");
+    return Results.Ok(schedule);
 });
 
 app.MapPut("/api/agents/{id}/restriction", async (string id, RestrictionRequest request) =>
@@ -191,6 +230,7 @@ app.MapGet("/api/agents", () =>
             SolicitudDesbloqueoPendiente = a.SolicitudDesbloqueoPendiente,
             SolicitudDesbloqueoUtc = a.SolicitudDesbloqueoUtc,
             NombrePersonalizado = a.NombrePersonalizado
+            ,Grupo = a.Grupo
         })
         .OrderBy(a => a.Equipo);
 });

@@ -9,11 +9,14 @@
     <AssemblyName>ARES.ControlCenter</AssemblyName>
     <Product>ARES Centro de Control</Product>
     <Description>Consola administrativa remota de ARES.</Description>
-    <Version>1.0.2</Version>
+    <Version>1.1.0</Version>
   </PropertyGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\ARES.Shared\ARES.Shared.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="ClosedXML" Version="0.105.0" />
   </ItemGroup>
   <ItemGroup>
     <None Update="appsettings.json">

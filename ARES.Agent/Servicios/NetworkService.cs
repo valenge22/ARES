@@ -11,6 +11,7 @@ public sealed class NetworkService : IDisposable
     private readonly HttpClient cliente = new() { Timeout = TimeSpan.FromSeconds(10) };
     private readonly AgentSettings configuracion = AgentSettings.Cargar();
     private readonly string agentId = ObtenerIdEquipo();
+    private readonly SchedulePolicy schedule = new();
     public event Action<string, bool>? EstadoCambiado;
     public event Action<bool>? RestriccionCambiada;
 
@@ -41,12 +42,18 @@ public sealed class NetworkService : IDisposable
                 respuesta.EnsureSuccessStatusCode();
                 HeartbeatResponse? politica = await respuesta.Content.ReadFromJsonAsync<HeartbeatResponse>(cancellationToken: cancelacion);
                 if (politica != null)
-                    RestriccionCambiada?.Invoke(politica.BloqueadoAdministrativamente);
+                {
+                    schedule.Update(politica);
+                    RestriccionCambiada?.Invoke(politica.BloqueadoAdministrativamente ||
+                        (schedule.MustBlock(politica.ServerTimeUtc) ?? false));
+                }
                 EstadoCambiado?.Invoke("Conectado al servidor remoto", true);
             }
             catch (OperationCanceledException) when (cancelacion.IsCancellationRequested) { break; }
             catch (Exception ex)
             {
+                bool? porHorario = schedule.MustBlock(DateTimeOffset.UtcNow);
+                if (porHorario.HasValue) RestriccionCambiada?.Invoke(porHorario.Value);
                 EstadoCambiado?.Invoke($"Sin conexión: {ex.Message}", false);
             }
 

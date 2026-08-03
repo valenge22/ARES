@@ -43,4 +43,11 @@ internal sealed class AresApiClient
         using var response = await http.SendAsync(request);
         response.EnsureSuccessStatusCode();
     }
+    public async Task RenameAgentAsync(string id, string name)
+    {
+        using var request = Request(HttpMethod.Put, $"/api/agents/{Uri.EscapeDataString(id)}/name");
+        request.Content = JsonContent.Create(new RenameAgentRequest { Nombre = name });
+        using var response = await http.SendAsync(request);
+        response.EnsureSuccessStatusCode();
+    }
 }

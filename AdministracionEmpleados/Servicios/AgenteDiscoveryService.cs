@@ -24,7 +24,9 @@ public sealed class AgenteDiscoveryService
 
         return (agentes ?? [])
             .Where(a => a.EstaEnLinea)
-            .Select(a => new AgenteDetectado(a.Id, a.Equipo, a.Usuario, "Remoto", a.Sistema,
+            .Select(a => new AgenteDetectado(a.Id,
+                string.IsNullOrWhiteSpace(a.NombrePersonalizado) ? a.Equipo : a.NombrePersonalizado,
+                a.Usuario, "Remoto", a.Sistema,
                 a.BloqueadoAdministrativamente, a.SolicitudDesbloqueoPendiente, a.SolicitudDesbloqueoUtc))
             .ToList();
     }
@@ -58,6 +60,16 @@ public sealed class AgenteDiscoveryService
         cliente.DefaultRequestHeaders.Add("X-ARES-Key", configuracion.ApiKey);
         using HttpResponseMessage respuesta = await cliente.DeleteAsync(
             $"{configuracion.ServerUrl.TrimEnd('/')}/api/agents", cancelacion);
+        respuesta.EnsureSuccessStatusCode();
+    }
+    public async Task RenombrarEquipoAsync(string agentId, string nombre, CancellationToken cancelacion = default)
+    {
+        AresSettings configuracion = AresSettings.Cargar();
+        using var cliente = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
+        cliente.DefaultRequestHeaders.Add("X-ARES-Key", configuracion.ApiKey);
+        using HttpResponseMessage respuesta = await cliente.PutAsJsonAsync(
+            $"{configuracion.ServerUrl.TrimEnd('/')}/api/agents/{agentId}/name",
+            new RenameAgentRequest { Nombre = nombre }, cancelacion);
         respuesta.EnsureSuccessStatusCode();
     }
 }

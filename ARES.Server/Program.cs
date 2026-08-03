@@ -65,7 +65,8 @@ app.MapPost("/api/agents/heartbeat", async (AgentHeartbeat heartbeat) =>
         BloqueadoAdministrativamente = anterior?.BloqueadoAdministrativamente ?? heartbeat.BloqueadoLocalmente,
         SolicitudDesbloqueoPendiente = anterior?.SolicitudDesbloqueoPendiente ?? false,
         SolicitudDesbloqueoUtc = anterior?.SolicitudDesbloqueoUtc
-        ,RequestToken = string.IsNullOrWhiteSpace(heartbeat.RequestToken) ? anterior?.RequestToken ?? "" : heartbeat.RequestToken
+        ,RequestToken = string.IsNullOrWhiteSpace(heartbeat.RequestToken) ? anterior?.RequestToken ?? "" : heartbeat.RequestToken,
+        NombrePersonalizado = anterior?.NombrePersonalizado ?? ""
     };
     if (!estabaEnLinea)
         await RegistrarEventoAsync(heartbeat.Id, heartbeat.Equipo, "AGENTE_CONECTADO", "ARES Agent inició o recuperó la conexión.");
@@ -109,6 +110,19 @@ app.MapPost("/api/agents/{id}/unlock-request", async (string id) =>
         await GuardarAsync();
     }
     return Results.Ok(new { received = true, requestedAtUtc = agente.SolicitudDesbloqueoUtc });
+});
+
+app.MapPut("/api/agents/{id}/name", async (string id, RenameAgentRequest request) =>
+{
+    if (!agents.TryGetValue(id, out AgentStatus? agente))
+        return Results.NotFound(new { error = "El agente no está registrado." });
+    string nombre = request.Nombre.Trim();
+    if (nombre.Length is < 1 or > 50)
+        return Results.BadRequest(new { error = "El nombre debe tener entre 1 y 50 caracteres." });
+    agente.NombrePersonalizado = nombre;
+    await RegistrarEventoAsync(id, nombre, "EQUIPO_RENOMBRADO", $"Nombre real: {agente.Equipo}.");
+    await GuardarAsync();
+    return Results.Ok(new { updated = true, nombre });
 });
 
 app.MapGet("/solicitar/{token}", (string token) =>
@@ -169,7 +183,8 @@ app.MapGet("/api/agents", () =>
             EstaEnLinea = a.UltimaConexionUtc >= limite,
             BloqueadoAdministrativamente = a.BloqueadoAdministrativamente,
             SolicitudDesbloqueoPendiente = a.SolicitudDesbloqueoPendiente,
-            SolicitudDesbloqueoUtc = a.SolicitudDesbloqueoUtc
+            SolicitudDesbloqueoUtc = a.SolicitudDesbloqueoUtc,
+            NombrePersonalizado = a.NombrePersonalizado
         })
         .OrderBy(a => a.Equipo);
 });

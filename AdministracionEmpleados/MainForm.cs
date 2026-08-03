@@ -207,6 +207,7 @@ namespace AdministracionEmpleados
             tabla.Columns.Add(new DataGridViewTextBoxColumn { Name = "Usuario", HeaderText = "USUARIO", FillWeight = 110 });
             tabla.Columns.Add(new DataGridViewTextBoxColumn { Name = "IP", HeaderText = "DIRECCIÓN IP", FillWeight = 100 });
             tabla.Columns.Add(new DataGridViewTextBoxColumn { Name = "Solicitud", HeaderText = "SOLICITUD", FillWeight = 120 });
+            tabla.Columns.Add(new DataGridViewButtonColumn { Name = "Renombrar", HeaderText = "", Text = "Cambiar nombre", UseColumnTextForButtonValue = true, FillWeight = 85, FlatStyle = FlatStyle.Flat });
             tabla.Columns.Add(new DataGridViewButtonColumn { Name = "Ver", HeaderText = "", Text = "Ver", UseColumnTextForButtonValue = true, FillWeight = 55, FlatStyle = FlatStyle.Flat });
             tabla.Columns.Add(new DataGridViewButtonColumn { Name = "Accion", HeaderText = "ACCIÓN", FillWeight = 85, FlatStyle = FlatStyle.Flat });
 
@@ -217,7 +218,7 @@ namespace AdministracionEmpleados
                 int fila = tabla.Rows.Add(indicador + pc.Nombre,
                     pc.EstaBloqueada ? "Bloqueado" : "Desbloqueado",
                     empleado.Nombre, pc.DireccionIP,
-                    pc.SolicitudDesbloqueoPendiente ? "🔔 Desbloqueo solicitado" : "—", "Ver",
+                    pc.SolicitudDesbloqueoPendiente ? "🔔 Desbloqueo solicitado" : "—", "Cambiar nombre", "Ver",
                     pc.EstaBloqueada ? "Desbloquear" : "Bloquear");
                 tabla.Rows[fila].Tag = empleado;
                 tabla.Rows[fila].Cells[0].Style.ForeColor = pc.EstaEncendida
@@ -233,7 +234,14 @@ namespace AdministracionEmpleados
             tabla.CellContentClick += async (_, e) =>
             {
                 if (e.RowIndex < 0 || tabla.Rows[e.RowIndex].Tag is not Empleado empleado) return;
-                if (tabla.Columns[e.ColumnIndex].Name == "Ver")
+                if (tabla.Columns[e.ColumnIndex].Name == "Renombrar")
+                {
+                    string? nombre = PedirNombreEquipo(empleado.Computadora.Nombre);
+                    if (string.IsNullOrWhiteSpace(nombre)) return;
+                    try { await discoveryService.RenombrarEquipoAsync(empleado.Computadora.AgentId, nombre.Trim()); await BuscarEquiposAsync(); }
+                    catch (Exception ex) { MessageBox.Show($"No se pudo cambiar el nombre.\n\n{ex.Message}", "ARES", MessageBoxButtons.OK, MessageBoxIcon.Error); }
+                }
+                else if (tabla.Columns[e.ColumnIndex].Name == "Ver")
                 {
                     Computadora pc = empleado.Computadora;
                     MessageBox.Show($"Equipo: {pc.Nombre}\nUsuario: {empleado.Nombre}\nIP: {pc.DireccionIP}\nSistema: {pc.SistemaOperativo}\nEstado: {(pc.EstaEncendida ? "En línea" : "Sin conexión")}",
@@ -270,6 +278,17 @@ namespace AdministracionEmpleados
                 }
             };
             return tabla;
+        }
+
+        private static string? PedirNombreEquipo(string actual)
+        {
+            using var dialogo = new Form { Text = "Cambiar nombre", Width = 430, Height = 180, StartPosition = FormStartPosition.CenterParent, FormBorderStyle = FormBorderStyle.FixedDialog, MaximizeBox = false, MinimizeBox = false };
+            var texto = new TextBox { Text = actual, Left = 20, Top = 42, Width = 370, MaxLength = 50 };
+            var etiqueta = new Label { Text = "Nombre visible del equipo", Left = 20, Top = 18, AutoSize = true };
+            var guardar = new Button { Text = "Guardar", Left = 290, Top = 82, Width = 100, DialogResult = DialogResult.OK };
+            var cancelar = new Button { Text = "Cancelar", Left = 180, Top = 82, Width = 100, DialogResult = DialogResult.Cancel };
+            dialogo.Controls.AddRange([etiqueta, texto, cancelar, guardar]); dialogo.AcceptButton = guardar; dialogo.CancelButton = cancelar;
+            return dialogo.ShowDialog() == DialogResult.OK ? texto.Text : null;
         }
 
         private Control CrearVistaEmpleados()

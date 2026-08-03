@@ -81,12 +81,15 @@ public sealed class MainWindow : Window
     {
         var state = new TextBlock { Text = agent.EstaEnLinea ? "● En línea" : "● Sin conexión", Foreground = Brush.Parse(agent.EstaEnLinea ? "#16A34A" : "#DC2626"), FontWeight = FontWeight.Bold };
         var details = new StackPanel { Spacing = 4 };
-        details.Children.Add(new TextBlock { Text = agent.Equipo, FontSize = 17, FontWeight = FontWeight.Bold });
+        string displayName = string.IsNullOrWhiteSpace(agent.NombrePersonalizado) ? agent.Equipo : agent.NombrePersonalizado;
+        details.Children.Add(new TextBlock { Text = displayName, FontSize = 17, FontWeight = FontWeight.Bold });
         details.Children.Add(new TextBlock { Text = $"{agent.Usuario} · {agent.Sistema}", Foreground = Brush.Parse("#64748B") });
         if (agent.SolicitudDesbloqueoPendiente) details.Children.Add(new TextBlock { Text = "🔔 Solicitud de desbloqueo pendiente", Foreground = Brush.Parse("#EA580C"), FontWeight = FontWeight.Bold });
         var button = new Button { Content = agent.BloqueadoAdministrativamente ? "Desbloquear" : "Bloquear", Background = Brush.Parse(agent.BloqueadoAdministrativamente ? "#16A34A" : "#DC2626"), Foreground = Brushes.White, Padding = new Thickness(16, 9) };
+        var rename = new Button { Content = "Cambiar nombre", Padding = new Thickness(12, 7) };
+        rename.Click += async (_, _) => await RenameAsync(agent, displayName);
         button.Click += async (_, _) => { button.IsEnabled = false; try { await api.RestrictAsync(agent.Id, !agent.BloqueadoAdministrativamente); await ShowAgentsAsync(); } catch (Exception ex) { status.Text = $"Error: {ex.Message}"; } finally { button.IsEnabled = true; } };
-        var actions = new StackPanel { Spacing = 8, HorizontalAlignment = HorizontalAlignment.Right, Children = { state, button } };
+        var actions = new StackPanel { Spacing = 8, HorizontalAlignment = HorizontalAlignment.Right, Children = { state, rename, button } };
         var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto") }; grid.Children.Add(details); Grid.SetColumn(actions, 1); grid.Children.Add(actions);
         return new Border { Background = Brushes.White, CornerRadius = new CornerRadius(12), Padding = new Thickness(18), Child = grid };
     }
@@ -129,5 +132,17 @@ public sealed class MainWindow : Window
         cancel.Click += (_, _) => dialog.Close();
         accept.Click += (_, _) => { confirmed = true; dialog.Close(); };
         await dialog.ShowDialog(this); return confirmed;
+    }
+
+    private async Task RenameAsync(AgentStatus agent, string currentName)
+    {
+        var input = new TextBox { Text = currentName, MaxLength = 50 };
+        var cancel = new Button { Content = "Cancelar" };
+        var save = new Button { Content = "Guardar", Background = Brush.Parse("#2563EB"), Foreground = Brushes.White };
+        var dialog = new Window { Title = "Cambiar nombre", Width = 430, Height = 200, WindowStartupLocation = WindowStartupLocation.CenterOwner };
+        dialog.Content = new StackPanel { Margin = new Thickness(24), Spacing = 12, Children = { new TextBlock { Text = "Nombre visible del equipo" }, input, new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Spacing = 8, Children = { cancel, save } } } };
+        cancel.Click += (_, _) => dialog.Close();
+        save.Click += async (_, _) => { string name = input.Text?.Trim() ?? ""; if (name.Length == 0) return; await api.RenameAgentAsync(agent.Id, name); dialog.Close(); };
+        await dialog.ShowDialog(this); await ShowAgentsAsync();
     }
 }

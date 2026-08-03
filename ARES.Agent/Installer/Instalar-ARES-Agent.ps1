@@ -107,6 +107,13 @@ if ((Get-ScheduledTask -TaskName $nombreTarea).State -ne 'Running') {
     throw "No se pudo iniciar ARES Agent en la sesión de '$usuarioAdministrado'. Verificá que esa cuenta esté desbloqueada y tenga una sesión iniciada."
 }
 Start-ScheduledTask -TaskName $nombreTareaServicio
+$fondoGenerado = Join-Path $env:ProgramData 'ARES\lockscreen.png'
+for ($intento = 0; $intento -lt 10 -and -not (Test-Path $fondoGenerado); $intento++) {
+    Start-Sleep -Seconds 1
+}
+if (-not (Test-Path $fondoGenerado)) {
+    throw 'ARES Agent se instaló, pero no pudo generar el fondo de bloqueo. Verificá que app\Assets\lockscreen-template-v3.png exista en el paquete.'
+}
 Set-Content -LiteralPath $LogPath -Value "Instalación completada correctamente el $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')." -Encoding UTF8
 
 Add-Type -AssemblyName PresentationFramework

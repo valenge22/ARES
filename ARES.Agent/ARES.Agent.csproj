@@ -8,7 +8,7 @@
     <AssemblyName>ARES.Agent</AssemblyName>
     <Product>ARES Agent</Product>
     <Description>Agente visible de administración para equipos autorizados.</Description>
-    <Version>1.4.0</Version>
+    <Version>1.4.1</Version>
   </PropertyGroup>
 
   <ItemGroup>
@@ -20,9 +20,11 @@
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
     </None>
-    <None Update="Assets\lockscreen-template-v3.png">
+    <None Remove="Assets\lockscreen-template-v3.png" />
+    <Content Include="Assets\lockscreen-template-v3.png">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
-    </None>
+      <ExcludeFromSingleFile>true</ExcludeFromSingleFile>
+    </Content>
   </ItemGroup>
 </Project>

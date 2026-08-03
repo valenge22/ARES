@@ -53,6 +53,10 @@ internal static class LockscreenBranding
             personalizacion.DeleteValue("NoChangingLockScreen", false);
         }
 
+        using RegistryKey sistema = Registry.LocalMachine.CreateSubKey(
+            @"SOFTWARE\Policies\Microsoft\Windows\System", true);
+        sistema.SetValue("DisableAcrylicBackgroundOnLogon", 1, RegistryValueKind.DWord);
+
     }
 
     public static void ConfigurarAviso(AgentSettings settings, bool bloqueado)

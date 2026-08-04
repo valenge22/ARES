@@ -16,6 +16,8 @@ persistente; los agentes y paneles no se conectan directamente a Supabase.
 4. Desplegar nuevamente el servicio.
 5. Consultar `/health`. Al iniciar, ARES crea automáticamente la tabla
    `public.ares_state` y la tabla de administradores `public.ares_admin_users`.
+   ARES activa RLS en ambas tablas y retira el acceso directo de los roles
+   publicos `anon` y `authenticated`; solamente el backend accede por PostgreSQL.
 
 ## Crear el propietario inicial
 

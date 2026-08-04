@@ -65,6 +65,12 @@ internal sealed class AresPersistence
                 constraint ck_ares_admin_users_role
                     check (role in ('Owner', 'Administrator', 'Supervisor', 'Viewer'))
             );
+
+            alter table ares_state enable row level security;
+            alter table ares_admin_users enable row level security;
+
+            revoke all on table ares_state from anon, authenticated;
+            revoke all on table ares_admin_users from anon, authenticated;
             """;
         await command.ExecuteNonQueryAsync();
     }

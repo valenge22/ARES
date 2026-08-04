@@ -178,6 +178,35 @@ namespace AdministracionEmpleados
             encabezado.Controls.Add(carpetas);
             encabezado.Controls.Add(borrar);
             encabezado.Controls.Add(actualizar);
+            var publicar = new Button
+            {
+                Text = "Publicar Agent",
+                Dock = DockStyle.Right,
+                Width = 135,
+                FlatStyle = FlatStyle.Flat,
+                BackColor = Color.FromArgb(124, 58, 237),
+                ForeColor = Color.White,
+                Font = new Font("Segoe UI", 9F, FontStyle.Bold),
+                Cursor = Cursors.Hand
+            };
+            publicar.FlatAppearance.BorderSize = 0;
+            publicar.Click += async (_, _) =>
+            {
+                using var file = new OpenFileDialog { Filter = "Paquete ARES Agent (*.zip)|*.zip", Title = "Seleccioná el ZIP oficial del Agent" };
+                if (file.ShowDialog(this) != DialogResult.OK) return;
+                string? version = PedirVersionAgent();
+                if (version is null) return;
+                publicar.Enabled = false;
+                try
+                {
+                    await discoveryService.CargarPaqueteActualizacionAsync(file.FileName, version);
+                    await BuscarEquiposAsync();
+                    MessageBox.Show($"ARES Agent {version} quedó publicado. Los equipos anteriores ahora mostrarán el botón Actualizar.", "ARES", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                }
+                catch (Exception ex) { MessageBox.Show(ex.Message, "ARES", MessageBoxButtons.OK, MessageBoxIcon.Error); }
+                finally { publicar.Enabled = true; }
+            };
+            encabezado.Controls.Add(publicar);
             var tabla = CrearTablaEquipos();
             tabla.Dock = DockStyle.Fill;
             contenedor.Controls.Add(tabla);
@@ -352,6 +381,17 @@ namespace AdministracionEmpleados
             var cancelar = new Button { Text = "Cancelar", Left = 180, Top = 82, Width = 100, DialogResult = DialogResult.Cancel };
             dialogo.Controls.AddRange([etiqueta, texto, cancelar, guardar]); dialogo.AcceptButton = guardar; dialogo.CancelButton = cancelar;
             return dialogo.ShowDialog() == DialogResult.OK ? texto.Text : null;
+        }
+
+        private static string? PedirVersionAgent()
+        {
+            using var form = new Form { Text = "Publicar ARES Agent", Width = 410, Height = 175, StartPosition = FormStartPosition.CenterParent, FormBorderStyle = FormBorderStyle.FixedDialog, MaximizeBox = false, MinimizeBox = false };
+            var version = new TextBox { Text = "1.6.6", Left = 22, Top = 45, Width = 350 };
+            var publish = new Button { Text = "Publicar", Left = 272, Top = 84, Width = 100, DialogResult = DialogResult.OK };
+            form.Controls.AddRange([new Label { Text = "Versión incluida en el ZIP (ejemplo: 1.6.6)", Left = 22, Top = 20, AutoSize = true }, version, publish]);
+            form.AcceptButton = publish;
+            if (form.ShowDialog() != DialogResult.OK) return null;
+            return Version.TryParse(version.Text.Trim(), out Version? parsed) ? parsed.ToString(3) : null;
         }
 
         private static string? PedirGrupo(string actual)

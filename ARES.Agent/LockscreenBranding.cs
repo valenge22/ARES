@@ -35,23 +35,16 @@ internal static class LockscreenBranding
 
         using RegistryKey personalizacion = Registry.LocalMachine.CreateSubKey(
             @"SOFTWARE\Policies\Microsoft\Windows\Personalization", true);
-        string edicion = Registry.GetValue(
-            @"HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows NT\CurrentVersion",
-            "EditionID", "")?.ToString() ?? "";
-        bool admiteFondoForzado = edicion.Contains("Enterprise", StringComparison.OrdinalIgnoreCase) ||
-                                  edicion.Contains("Education", StringComparison.OrdinalIgnoreCase);
-        if (admiteFondoForzado)
-        {
-            personalizacion.SetValue("LockScreenImage", salida, RegistryValueKind.String);
-            personalizacion.SetValue("NoChangingLockScreen", 1, RegistryValueKind.DWord);
-        }
-        else
-        {
-            // Windows Pro puede ignorar la imagen forzada pero bloquear igualmente
-            // la pantalla de Personalizacion. Se deja el PNG listo para elegirlo una vez.
-            personalizacion.DeleteValue("LockScreenImage", false);
-            personalizacion.DeleteValue("NoChangingLockScreen", false);
-        }
+        personalizacion.SetValue("LockScreenImage", salida, RegistryValueKind.String);
+        personalizacion.SetValue("NoChangingLockScreen", 1, RegistryValueKind.DWord);
+
+        // Windows 10/11 Pro no siempre procesa la directiva clasica. PersonalizationCSP
+        // permite que el mismo fondo se aplique automaticamente sin abrir Configuracion.
+        using RegistryKey csp = Registry.LocalMachine.CreateSubKey(
+            @"SOFTWARE\Microsoft\Windows\CurrentVersion\PersonalizationCSP", true);
+        csp.SetValue("LockScreenImagePath", salida, RegistryValueKind.String);
+        csp.SetValue("LockScreenImageUrl", salida, RegistryValueKind.String);
+        csp.SetValue("LockScreenImageStatus", 1, RegistryValueKind.DWord);
 
         using RegistryKey sistema = Registry.LocalMachine.CreateSubKey(
             @"SOFTWARE\Policies\Microsoft\Windows\System", true);

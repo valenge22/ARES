@@ -16,6 +16,7 @@ namespace AdministracionEmpleados
         private readonly HashSet<string> alertasMostradas = [];
         private HashSet<string>? conectadosAnteriores;
         private readonly NotifyIcon notificador = new() { Icon = SystemIcons.Shield, Visible = true, Text = "ARES Centro de Control" };
+        private List<ControlSessionStatus> sesionesPanel = [];
 
         public MainForm()
         {
@@ -60,6 +61,8 @@ namespace AdministracionEmpleados
                 IReadOnlyList<AgenteDetectado> detectados = await discoveryService.BuscarAsync(
                     empleadoService.ObtenerEmpleados().Select(e => e.Computadora.DireccionIP));
                 empleadoService.ActualizarEquiposDetectados(detectados);
+                await discoveryService.RegistrarSesionPanelAsync();
+                sesionesPanel = await discoveryService.ObtenerSesionesPanelAsync();
 
                 int conectados = detectados.Count;
                 HashSet<string> actuales = detectados.Select(x => x.Id).ToHashSet(StringComparer.OrdinalIgnoreCase);
@@ -76,7 +79,7 @@ namespace AdministracionEmpleados
                 lblPuntoConexion.ForeColor = conectados > 0 ? Color.FromArgb(34, 197, 94) : Color.FromArgb(239, 68, 68);
                 lblConexion.ForeColor = conectados > 0 ? Color.FromArgb(22, 101, 52) : Color.FromArgb(153, 27, 27);
                 pnlEstadoConexion.BackColor = conectados > 0 ? Color.FromArgb(240, 253, 244) : Color.FromArgb(254, 242, 242);
-                lblConexion.Text = conectados == 1 ? "1 equipo conectado" : $"{conectados} equipos conectados";
+                lblConexion.Text = $"{conectados} equipos · {sesionesPanel.Count} paneles";
 
                 if (botonActivo == btnEquipos || botonActivo == btnEmpleados ||
                     botonActivo == btnMonitor || botonActivo == btnSeguridad)
@@ -412,22 +415,44 @@ namespace AdministracionEmpleados
 
         private Control CrearVistaMonitor()
         {
-            var panel = new TableLayoutPanel { ColumnCount = 3, RowCount = 2, BackColor = Color.Transparent };
-            panel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33.33F));
-            panel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33.33F));
-            panel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33.34F));
+            var panel = new TableLayoutPanel { ColumnCount = 4, RowCount = 2, BackColor = Color.Transparent };
+            for (int i = 0; i < 4; i++) panel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 25F));
             panel.RowStyles.Add(new RowStyle(SizeType.Absolute, 150));
             panel.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
             var equipos = empleadoService.ObtenerEmpleados();
             panel.Controls.Add(CrearMetrica("Equipos totales", equipos.Count.ToString(), Color.FromArgb(37, 99, 235)), 0, 0);
             panel.Controls.Add(CrearMetrica("En línea", equipos.Count(e => e.Computadora.EstaEncendida).ToString(), Color.FromArgb(22, 163, 74)), 1, 0);
             panel.Controls.Add(CrearMetrica("Bloqueados", equipos.Count(e => e.Computadora.EstaBloqueada).ToString(), Color.FromArgb(234, 88, 12)), 2, 0);
+            panel.Controls.Add(CrearMetrica("Sesiones del panel", sesionesPanel.Count.ToString(), Color.FromArgb(124, 58, 237)), 3, 0);
             var actividad = CrearTarjeta();
             actividad.Margin = new Padding(8, 20, 8, 0);
-            actividad.Controls.Add(CrearMensajeCentral("La actividad de los equipos aparecerá aquí", "ARES actualizará este panel cuando los agentes envíen métricas."));
+            actividad.Controls.Add(CrearTablaSesionesPanel());
+            actividad.Controls.Add(CrearEncabezadoTarjeta("Sesiones activas del Centro de Control", "Nombre editable, usuario, equipo, plataforma y última conexión"));
             panel.Controls.Add(actividad, 0, 1);
-            panel.SetColumnSpan(actividad, 3);
+            panel.SetColumnSpan(actividad, 4);
             return panel;
+        }
+
+        private DataGridView CrearTablaSesionesPanel()
+        {
+            var table = CrearListaSimple(new[] { "NOMBRE DE SESION", "USUARIO", "EQUIPO", "PLATAFORMA", "VERSION", "ULTIMA CONEXION" },
+                sesionesPanel.Select(x => new[] { x.Nombre, x.Usuario, x.Equipo, x.Plataforma, x.Version,
+                    x.UltimaConexionUtc.ToLocalTime().ToString("dd/MM/yyyy HH:mm:ss") }).ToList());
+            table.Columns.Add(new DataGridViewButtonColumn { Name = "RenombrarSesion", HeaderText = "", Text = "Cambiar nombre", UseColumnTextForButtonValue = true });
+            for (int i = 0; i < table.Rows.Count && i < sesionesPanel.Count; i++) table.Rows[i].Tag = sesionesPanel[i];
+            table.CellContentClick += async (_, e) =>
+            {
+                if (e.RowIndex < 0 || table.Columns[e.ColumnIndex].Name != "RenombrarSesion" ||
+                    table.Rows[e.RowIndex].Tag is not ControlSessionStatus session) return;
+                string? name = PedirNombreEquipo(session.Nombre); if (string.IsNullOrWhiteSpace(name)) return;
+                try
+                {
+                    await discoveryService.RenombrarSesionPanelAsync(session.Id, name);
+                    sesionesPanel = await discoveryService.ObtenerSesionesPanelAsync(); MostrarSeccion(btnMonitor);
+                }
+                catch (Exception ex) { MessageBox.Show(ex.Message, "ARES", MessageBoxButtons.OK, MessageBoxIcon.Error); }
+            };
+            return table;
         }
 
         private Control CrearVistaSeguridad()

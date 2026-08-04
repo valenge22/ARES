@@ -23,12 +23,17 @@ string historyPath = Path.Combine(AppContext.BaseDirectory, "data", "schedule-hi
 string policiesPath = Path.Combine(AppContext.BaseDirectory, "data", "group-policies.json");
 string updatePackagePath = Path.Combine(AppContext.BaseDirectory, "data", "agent-update.zip");
 string updateVersionPath = Path.Combine(AppContext.BaseDirectory, "data", "agent-update-version.txt");
+string controlSessionsPath = Path.Combine(AppContext.BaseDirectory, "data", "control-sessions.json");
 Directory.CreateDirectory(Path.GetDirectoryName(dataPath)!);
 
 var agents = new ConcurrentDictionary<string, AgentStatus>(StringComparer.OrdinalIgnoreCase);
 var audit = new ConcurrentQueue<AgentAuditEvent>();
 var saveLock = new SemaphoreSlim(1, 1);
 var requestLimits = new ConcurrentDictionary<string, DateTimeOffset>(StringComparer.Ordinal);
+var controlSessions = new ConcurrentDictionary<string, ControlSessionStatus>(StringComparer.OrdinalIgnoreCase);
+if (File.Exists(controlSessionsPath))
+    foreach (ControlSessionStatus session in JsonSerializer.Deserialize<List<ControlSessionStatus>>(File.ReadAllText(controlSessionsPath)) ?? [])
+        controlSessions[session.Id] = session;
 ScheduleState schedule = File.Exists(schedulePath)
     ? JsonSerializer.Deserialize<ScheduleState>(File.ReadAllText(schedulePath)) ?? new()
     : new();
@@ -69,6 +74,39 @@ app.Use(async (context, next) =>
 });
 
 app.MapGet("/health", () => Results.Ok(new { service = "ARES Server", status = "ok" }));
+
+app.MapPost("/api/control-sessions/heartbeat", async (ControlSessionHeartbeat heartbeat) =>
+{
+    if (string.IsNullOrWhiteSpace(heartbeat.Id)) return Results.BadRequest();
+    DateTimeOffset now = DateTimeOffset.UtcNow;
+    controlSessions.AddOrUpdate(heartbeat.Id,
+        _ => new ControlSessionStatus { Id = heartbeat.Id, Usuario = heartbeat.Usuario, Equipo = heartbeat.Equipo,
+            Plataforma = heartbeat.Plataforma, Version = heartbeat.Version, Nombre = string.IsNullOrWhiteSpace(heartbeat.Nombre) ? $"{heartbeat.Usuario} @ {heartbeat.Equipo}" : heartbeat.Nombre,
+            UltimaConexionUtc = now, Activa = true },
+        (_, current) => { current.Usuario = heartbeat.Usuario; current.Equipo = heartbeat.Equipo; current.Plataforma = heartbeat.Plataforma;
+            current.Version = heartbeat.Version; current.UltimaConexionUtc = now; current.Activa = true; return current; });
+    int count = controlSessions.Values.Count(x => x.UltimaConexionUtc >= now.AddSeconds(-35));
+    await GuardarSesionesPanelAsync();
+    return Results.Ok(new { active = count });
+});
+
+app.MapGet("/api/control-sessions", () =>
+{
+    DateTimeOffset limit = DateTimeOffset.UtcNow.AddSeconds(-35);
+    return controlSessions.Values.Select(x => new ControlSessionStatus
+    {
+        Id = x.Id, Usuario = x.Usuario, Equipo = x.Equipo, Plataforma = x.Plataforma,
+        Version = x.Version, Nombre = x.Nombre, UltimaConexionUtc = x.UltimaConexionUtc, Activa = x.UltimaConexionUtc >= limit
+    }).Where(x => x.Activa).OrderBy(x => x.Usuario);
+});
+
+app.MapPut("/api/control-sessions/{id}/name", async (string id, RenameAgentRequest request) =>
+{
+    if (!controlSessions.TryGetValue(id, out ControlSessionStatus? session)) return Results.NotFound();
+    string name = request.Nombre.Trim();
+    if (name.Length is < 1 or > 60) return Results.BadRequest(new { error = "El nombre debe tener entre 1 y 60 caracteres." });
+    session.Nombre = name; await GuardarSesionesPanelAsync(); return Results.Ok(new { updated = true, nombre = name });
+});
 
 app.MapPost("/api/agents/heartbeat", async (AgentHeartbeat heartbeat, HttpRequest httpRequest) =>
 {
@@ -461,6 +499,13 @@ async Task GuardarHorariosAsync()
     var options = new JsonSerializerOptions { WriteIndented = true };
     await File.WriteAllTextAsync(schedulePath, JsonSerializer.Serialize(schedule, options));
     await File.WriteAllTextAsync(historyPath, JsonSerializer.Serialize(scheduleHistory, options));
+}
+
+async Task GuardarSesionesPanelAsync()
+{
+    await saveLock.WaitAsync();
+    try { await File.WriteAllTextAsync(controlSessionsPath, JsonSerializer.Serialize(controlSessions.Values, new JsonSerializerOptions { WriteIndented = true })); }
+    finally { saveLock.Release(); }
 }
 
 ScheduleState ClonarHorario(ScheduleState value) => JsonSerializer.Deserialize<ScheduleState>(JsonSerializer.Serialize(value)) ?? new();

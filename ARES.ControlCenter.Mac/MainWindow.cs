@@ -29,6 +29,7 @@ public sealed class MainWindow : Window
         nav.Children.Add(NavButton("💻  Equipos", () => ShowAgentsAsync()));
         nav.Children.Add(NavButton("📋  Registros", ShowAuditAsync));
         nav.Children.Add(NavButton("📅  Horarios", ShowScheduleAsync));
+        nav.Children.Add(NavButton("👤  Sesiones del panel", ShowControlSessionsAsync));
         nav.Children.Add(NavButton("⚙  Configuración", ShowSettingsAsync));
 
         var refresh = new Button { Content = "↻ Actualizar", Padding = new Thickness(18, 9), Background = Brush.Parse("#2563EB"), Foreground = Brushes.White };
@@ -69,9 +70,10 @@ public sealed class MainWindow : Window
         try
         {
             title.Text = "Equipos"; if (showLoading) status.Text = "Actualizando…";
+            int panels = await api.HeartbeatControlSessionAsync();
             var agents = await api.AgentsAsync(); content.Children.Clear();
             foreach (var agent in agents) content.Children.Add(AgentCard(agent));
-            status.Text = $"{agents.Count(a => a.EstaEnLinea)} de {agents.Count} equipos conectados · {DateTime.Now:HH:mm:ss}";
+            status.Text = $"{agents.Count(a => a.EstaEnLinea)} de {agents.Count} equipos conectados · {panels} paneles activos · {DateTime.Now:HH:mm:ss}";
             if (agents.Count == 0) content.Children.Add(new TextBlock { Text = "No hay equipos registrados.", Margin = new Thickness(12), Foreground = Brush.Parse("#64748B") });
         }
         catch (Exception ex) { status.Text = $"Error: {ex.Message}"; }
@@ -127,6 +129,36 @@ public sealed class MainWindow : Window
         }
         catch (Exception ex) { status.Text = $"Error: {ex.Message}"; }
         finally { loading = false; }
+    }
+
+    private async Task ShowControlSessionsAsync()
+    {
+        if (loading) return; loading = true;
+        try
+        {
+            await api.HeartbeatControlSessionAsync(); List<ControlSessionStatus> sessions = await api.ControlSessionsAsync();
+            title.Text = "Sesiones del panel"; content.Children.Clear(); status.Text = $"{sessions.Count} sesiones activas";
+            foreach (ControlSessionStatus session in sessions)
+            {
+                var rename = new Button { Content = "Cambiar nombre", Padding = new Thickness(12, 7) };
+                rename.Click += async (_, _) => await RenameControlSessionAsync(session);
+                var details = new StackPanel { Spacing = 4, Children = { new TextBlock { Text = session.Nombre, FontSize = 17, FontWeight = FontWeight.Bold },
+                    new TextBlock { Text = $"{session.Usuario} · {session.Equipo} · {session.Plataforma} · v{session.Version}", Foreground = Brush.Parse("#64748B") },
+                    new TextBlock { Text = $"Última conexión: {session.UltimaConexionUtc.ToLocalTime():dd/MM/yyyy HH:mm:ss}", Foreground = Brush.Parse("#64748B") }, rename } };
+                content.Children.Add(new Border { Background = Brushes.White, CornerRadius = new CornerRadius(9), Padding = new Thickness(14), Child = details });
+            }
+        }
+        catch (Exception ex) { status.Text = $"Error: {ex.Message}"; }
+        finally { loading = false; }
+    }
+
+    private async Task RenameControlSessionAsync(ControlSessionStatus session)
+    {
+        var input = new TextBox { Text = session.Nombre, MaxLength = 60 }; var save = new Button { Content = "Guardar" };
+        var dialog = new Window { Title = "Nombre de la sesión", Width = 430, Height = 190, WindowStartupLocation = WindowStartupLocation.CenterOwner };
+        dialog.Content = new StackPanel { Margin = new Thickness(24), Spacing = 12, Children = { new TextBlock { Text = "Nombre visible de esta sesión" }, input, save } };
+        save.Click += async (_, _) => { string name = input.Text?.Trim() ?? ""; if (name.Length == 0) return; await api.RenameControlSessionAsync(session.Id, name); dialog.Close(); };
+        await dialog.ShowDialog(this); await ShowControlSessionsAsync();
     }
 
     private async Task ShowSettingsAsync()

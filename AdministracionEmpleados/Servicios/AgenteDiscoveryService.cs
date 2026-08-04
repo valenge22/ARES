@@ -1,5 +1,8 @@
 using ARES.Shared.Modelos;
 using System.Net.Http.Json;
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
 
 namespace AdministracionEmpleados.Servicios;
 
@@ -10,6 +13,7 @@ public sealed record AgenteDetectado(string Id, string Equipo, string Usuario, s
 
 public sealed class AgenteDiscoveryService
 {
+    private static readonly string sessionId = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes($"{Environment.MachineName}|{Environment.UserName}|ARES.ControlCenter")))[..24];
     public async Task<IReadOnlyList<AgenteDetectado>> BuscarAsync(
         IEnumerable<string> direccionesConocidas,
         CancellationToken cancelacion = default)
@@ -116,6 +120,30 @@ public sealed class AgenteDiscoveryService
         var cliente = new HttpClient { Timeout = TimeSpan.FromSeconds(20) };
         cliente.DefaultRequestHeaders.Add("X-ARES-Key", settings.ApiKey);
         return cliente;
+    }
+
+    public async Task<int> RegistrarSesionPanelAsync(CancellationToken cancelacion = default)
+    {
+        using HttpClient cliente = CrearCliente();
+        using HttpResponseMessage response = await cliente.PostAsJsonAsync($"{AresSettings.Cargar().ServerUrl.TrimEnd('/')}/api/control-sessions/heartbeat",
+            new ControlSessionHeartbeat { Id = sessionId, Usuario = Environment.UserName, Equipo = Environment.MachineName,
+                Plataforma = "Windows", Version = typeof(AgenteDiscoveryService).Assembly.GetName().Version?.ToString(3) ?? "" }, cancelacion);
+        response.EnsureSuccessStatusCode();
+        using JsonDocument json = await JsonDocument.ParseAsync(await response.Content.ReadAsStreamAsync(cancelacion), cancellationToken: cancelacion);
+        return json.RootElement.GetProperty("active").GetInt32();
+    }
+
+    public async Task<List<ControlSessionStatus>> ObtenerSesionesPanelAsync(CancellationToken cancelacion = default)
+    {
+        using HttpClient cliente = CrearCliente();
+        return await cliente.GetFromJsonAsync<List<ControlSessionStatus>>($"{AresSettings.Cargar().ServerUrl.TrimEnd('/')}/api/control-sessions", cancelacion) ?? [];
+    }
+
+    public async Task RenombrarSesionPanelAsync(string id, string nombre, CancellationToken cancelacion = default)
+    {
+        using HttpClient cliente = CrearCliente();
+        using HttpResponseMessage response = await cliente.PutAsJsonAsync($"{AresSettings.Cargar().ServerUrl.TrimEnd('/')}/api/control-sessions/{id}/name", new RenameAgentRequest { Nombre = nombre }, cancelacion);
+        response.EnsureSuccessStatusCode();
     }
 
     public async Task EstablecerRestriccionAsync(string agentId, bool bloqueado, CancellationToken cancelacion = default)

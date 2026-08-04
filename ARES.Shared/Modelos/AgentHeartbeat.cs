@@ -128,3 +128,19 @@ public sealed class AgentAuditEvent
     public string Detalle { get; set; } = "";
     public DateTimeOffset FechaUtc { get; set; }
 }
+
+public class ControlSessionHeartbeat
+{
+    public string Id { get; set; } = "";
+    public string Usuario { get; set; } = "";
+    public string Equipo { get; set; } = "";
+    public string Plataforma { get; set; } = "";
+    public string Version { get; set; } = "";
+    public string Nombre { get; set; } = "";
+}
+
+public sealed class ControlSessionStatus : ControlSessionHeartbeat
+{
+    public DateTimeOffset UltimaConexionUtc { get; set; }
+    public bool Activa { get; set; }
+}

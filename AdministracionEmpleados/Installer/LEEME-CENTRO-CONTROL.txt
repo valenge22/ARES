@@ -1,14 +1,13 @@
 ARES CENTRO DE CONTROL
 ======================
 
-1. Descomprimí el ZIP completo.
-2. Ejecutá INSTALAR-CENTRO-CONTROL.bat.
-3. La aplicación se abrirá y se crearán accesos directos.
-4. En Configuración, ingresá la misma clave ARES_API_KEY usada en Render.
+1. Ejecutá ARES-Centro-Control-Setup.exe.
+2. Seguí el asistente gráfico de instalación.
+3. Iniciá sesión con tu correo y contraseña de ARES.
 
 El programa se instala para el usuario actual en:
 %LocalAppData%\Programs\ARES Centro de Control
 
 No necesita instalar .NET por separado.
 
-Para quitarlo, ejecutá DESINSTALAR-CENTRO-CONTROL.bat desde este paquete.
+Para quitarlo, usá Configuración de Windows > Aplicaciones instaladas.

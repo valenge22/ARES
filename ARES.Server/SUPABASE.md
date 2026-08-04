@@ -6,6 +6,8 @@ persistente; los agentes y paneles no se conectan directamente a Supabase.
 1. En Supabase, abrir **Connect** y copiar la cadena de conexión del pooler en
    modo **Session**. Para Render conviene la dirección IPv4 del pooler.
 2. Reemplazar el marcador de contraseña por la contraseña de la base de datos.
+   ARES acepta tanto la URL `postgresql://...` copiada de Supabase como una
+   cadena de parámetros compatible con Npgsql.
 3. En Render, abrir el servicio de ARES y agregar un Secret/Environment Variable:
 
    - Nombre: `SUPABASE_DB_CONNECTION`

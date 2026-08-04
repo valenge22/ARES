@@ -11,8 +11,34 @@ internal sealed class AresPersistence
 
     public AresPersistence(IConfiguration configuration)
     {
-        connectionString = configuration["SUPABASE_DB_CONNECTION"]
+        string? configured = configuration["SUPABASE_DB_CONNECTION"]
             ?? Environment.GetEnvironmentVariable("SUPABASE_DB_CONNECTION");
+        connectionString = NormalizeConnectionString(configured);
+    }
+
+    private static string? NormalizeConnectionString(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return null;
+        value = value.Trim();
+        if (!value.StartsWith("postgres://", StringComparison.OrdinalIgnoreCase) &&
+            !value.StartsWith("postgresql://", StringComparison.OrdinalIgnoreCase))
+            return value;
+
+        var uri = new Uri(value);
+        string[] userInfo = uri.UserInfo.Split(':', 2);
+        if (userInfo.Length != 2)
+            throw new InvalidOperationException("La URL de Supabase no contiene usuario y contraseña.");
+
+        return new NpgsqlConnectionStringBuilder
+        {
+            Host = uri.Host,
+            Port = uri.IsDefaultPort ? 5432 : uri.Port,
+            Database = uri.AbsolutePath.TrimStart('/'),
+            Username = Uri.UnescapeDataString(userInfo[0]),
+            Password = Uri.UnescapeDataString(userInfo[1]),
+            SslMode = SslMode.Require,
+            Pooling = true
+        }.ConnectionString;
     }
 
     public async Task InitializeAsync()

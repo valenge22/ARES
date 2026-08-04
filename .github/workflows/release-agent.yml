@@ -21,6 +21,10 @@ jobs:
         with:
           dotnet-version: "10.0.x"
 
+      - name: Instalar Inno Setup
+        shell: powershell
+        run: choco install innosetup --no-progress -y
+
       - name: Crear paquete autónomo
         shell: powershell
         env:
@@ -31,7 +35,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ARES-Agent-Remoto-Windows-x64
-          path: distribucion/ARES-Agent-Windows-x64.zip
+          path: |
+            distribucion/ARES-Agent-Setup.exe
+            distribucion/ARES-Agent-Windows-x64.zip
 
       - name: Crear GitHub Release
         if: startsWith(github.ref, 'refs/tags/')
@@ -40,6 +46,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: >-
           gh release create "${{ github.ref_name }}"
+          "distribucion/ARES-Agent-Setup.exe#ARES-Agent-Setup.exe"
           "distribucion/ARES-Agent-Windows-x64.zip#ARES-Agent-Remoto-Windows-x64.zip"
           --title "ARES Agent ${{ github.ref_name }}"
-          --notes "Instalador autónomo para Windows 10/11 x64. Descomprimir el ZIP completo y ejecutar INSTALAR.bat."
+          --notes "Instalador gráfico para Windows 10/11 x64. Descargar y ejecutar ARES-Agent-Setup.exe. El ZIP se conserva para diagnóstico."

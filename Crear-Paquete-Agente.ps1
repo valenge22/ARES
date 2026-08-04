@@ -5,6 +5,7 @@ $raiz = $PSScriptRoot
 $salida = Join-Path $raiz 'distribucion\ARES-Agent-Windows-x64'
 $app = Join-Path $salida 'app'
 $zip = Join-Path $raiz 'distribucion\ARES-Agent-Windows-x64.zip'
+$setup = Join-Path $raiz 'distribucion\ARES-Agent-Setup.exe'
 $proteccionAnterior = Join-Path $salida 'uninstall-protection.json'
 $contenidoProteccionAnterior = if (Test-Path $proteccionAnterior) {
     [IO.File]::ReadAllBytes($proteccionAnterior)
@@ -12,6 +13,7 @@ $contenidoProteccionAnterior = if (Test-Path $proteccionAnterior) {
 
 if (Test-Path $salida) { Remove-Item -LiteralPath $salida -Recurse -Force }
 if (Test-Path $zip) { Remove-Item -LiteralPath $zip -Force }
+if (Test-Path $setup) { Remove-Item -LiteralPath $setup -Force }
 New-Item -ItemType Directory -Path $app -Force | Out-Null
 
 dotnet publish (Join-Path $raiz 'ARES.Agent\ARES.Agent.csproj') `
@@ -68,4 +70,16 @@ Get-ChildItem -Path $salida -Filter '*.bat' | ForEach-Object {
     [IO.File]::WriteAllText($_.FullName, $contenido, [Text.UTF8Encoding]::new($false))
 }
 Compress-Archive -Path (Join-Path $salida '*') -DestinationPath $zip -CompressionLevel Optimal
+$isccCandidates = @(
+    (Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6\ISCC.exe'),
+    (Join-Path $env:ProgramFiles 'Inno Setup 6\ISCC.exe')
+) | Where-Object { $_ -and (Test-Path $_) }
+$iscc = $isccCandidates | Select-Object -First 1
+if (-not $iscc) { throw 'No se encontro Inno Setup 6 (ISCC.exe).' }
+
+$iss = Join-Path $raiz 'ARES.Agent\Installer\ARES-Agent.iss'
+& $iscc "/DPackageSource=$salida" "/DOutputDir=$(Join-Path $raiz 'distribucion')" '/DAppVersion=1.6.3' $iss
+if ($LASTEXITCODE -ne 0 -or -not (Test-Path $setup)) { throw 'No se pudo generar el instalador EXE de ARES Agent.' }
+
 Write-Host "Paquete creado: $zip"
+Write-Host "Instalador creado: $setup"

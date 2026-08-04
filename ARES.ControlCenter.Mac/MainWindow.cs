@@ -183,12 +183,41 @@ public sealed class MainWindow : Window
         var url = new TextBox { Text = settings.ServerUrl, PlaceholderText = "Servidor HTTPS" };
         var save = new Button { Content = "Guardar", HorizontalAlignment = HorizontalAlignment.Right, Padding = new Thickness(18, 9) };
         var logout = new Button { Content = "Cerrar sesión", HorizontalAlignment = HorizontalAlignment.Right, Padding = new Thickness(18, 9) };
+        var users = new Button { Content = "Administrar usuarios", IsVisible = MacControlAuth.Client.User?.Role == "Owner", Padding = new Thickness(18, 9) };
         var dialog = new Window { Title = "Configuración de ARES", Width = 520, Height = 280, WindowStartupLocation = WindowStartupLocation.CenterOwner };
         string account = MacControlAuth.Client.User is null ? "" : $"{MacControlAuth.Client.User.DisplayName} · {MacControlAuth.Client.User.Email} · {MacControlAuth.Client.User.Role}";
-        dialog.Content = new StackPanel { Margin = new Thickness(24), Spacing = 12, Children = { new TextBlock { Text = $"Sesión: {account}" }, new TextBlock { Text = "Dirección del servidor" }, url, new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Spacing = 8, Children = { logout, save } } } };
+        dialog.Content = new StackPanel { Margin = new Thickness(24), Spacing = 12, Children = { new TextBlock { Text = $"Sesión: {account}" }, new TextBlock { Text = "Dirección del servidor" }, url, users, new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Spacing = 8, Children = { logout, save } } } };
         save.Click += (_, _) => { settings.ServerUrl = url.Text?.Trim() ?? ""; settings.Save(); api.Update(settings); dialog.Close(); };
         logout.Click += (_, _) => { MacControlAuth.Client.Logout(); if (Application.Current?.ApplicationLifetime is Avalonia.Controls.ApplicationLifetimes.IClassicDesktopStyleApplicationLifetime desktop) desktop.Shutdown(); };
+        users.Click += async (_, _) => await ShowUsersAsync(dialog);
         await dialog.ShowDialog(this); await ShowAgentsAsync();
+    }
+
+    private async Task ShowUsersAsync(Window owner)
+    {
+        var list = new StackPanel { Spacing = 10 }; var dialog = new Window { Title = "Usuarios del panel ARES", Width = 760, Height = 600, WindowStartupLocation = WindowStartupLocation.CenterOwner };
+        async Task LoadAsync()
+        {
+            list.Children.Clear();
+            foreach (var item in (await api.RegistrationsAsync()).Where(x => x.Status == "Pending"))
+            {
+                var role = new ComboBox { Width = 140, ItemsSource = new[] { "Administrator", "Supervisor", "Viewer" }, SelectedIndex = 1 };
+                var approve = new Button { Content = "Aprobar" }; var reject = new Button { Content = "Rechazar" };
+                approve.Click += async (_, _) => { await api.ApproveAsync(item.UserId, role.SelectedItem?.ToString() ?? "Supervisor"); await LoadAsync(); };
+                reject.Click += async (_, _) => { await api.RejectAsync(item.UserId); await LoadAsync(); };
+                list.Children.Add(new Border { Background = Brushes.White, Padding = new Thickness(12), Child = new StackPanel { Spacing = 6, Children = { new TextBlock { Text = $"PENDIENTE · {item.DisplayName} · {item.Email}", FontWeight = FontWeight.Bold }, new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Children = { role, approve, reject } } } } });
+            }
+            foreach (var item in await api.AdminUsersAsync())
+            {
+                var role = new ComboBox { Width = 140, ItemsSource = new[] { "Administrator", "Supervisor", "Viewer" }, SelectedItem = item.Role, IsEnabled = item.Role != "Owner" };
+                var toggle = new Button { Content = item.Enabled ? "Suspender" : "Habilitar", IsEnabled = item.Role != "Owner" };
+                var save = new Button { Content = "Guardar rol", IsEnabled = item.Role != "Owner" };
+                toggle.Click += async (_, _) => { await api.UpdateAdminAsync(item.UserId, item.Role, !item.Enabled); await LoadAsync(); };
+                save.Click += async (_, _) => { await api.UpdateAdminAsync(item.UserId, role.SelectedItem?.ToString() ?? item.Role, item.Enabled); await LoadAsync(); };
+                list.Children.Add(new Border { Background = Brushes.White, Padding = new Thickness(12), Child = new StackPanel { Spacing = 6, Children = { new TextBlock { Text = $"{item.DisplayName} · {item.Email} · {(item.Enabled ? "Activo" : "Suspendido")}", FontWeight = FontWeight.Bold }, new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Children = { role, save, toggle } } } } });
+            }
+        }
+        dialog.Content = new ScrollViewer { Content = list, Padding = new Thickness(18) }; await LoadAsync(); await dialog.ShowDialog(owner);
     }
 
     private async Task<bool> ConfirmClearAsync()

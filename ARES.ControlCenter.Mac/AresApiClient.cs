@@ -1,4 +1,5 @@
 using ARES.Shared.Modelos;
+using ARES.Shared.Servicios;
 using System.Net.Http.Json;
 using System.Security.Cryptography;
 using System.Text;
@@ -101,5 +102,27 @@ internal sealed class AresApiClient
     {
         using var request = Request(HttpMethod.Post, "/api/control-update/request"); request.Content = JsonContent.Create(new ControlUpdateRequest { SessionIds = ids.ToList() });
         using var response = await http.SendAsync(request); response.EnsureSuccessStatusCode();
+    }
+    public async Task<List<RegistrationRequestInfo>> RegistrationsAsync()
+    {
+        using var request = Request(HttpMethod.Get, "/api/admin/registrations"); using var response = await http.SendAsync(request); response.EnsureSuccessStatusCode();
+        return await response.Content.ReadFromJsonAsync<List<RegistrationRequestInfo>>() ?? [];
+    }
+    public async Task<List<AdminUserInfo>> AdminUsersAsync()
+    {
+        using var request = Request(HttpMethod.Get, "/api/admin/users"); using var response = await http.SendAsync(request); response.EnsureSuccessStatusCode();
+        return await response.Content.ReadFromJsonAsync<List<AdminUserInfo>>() ?? [];
+    }
+    public async Task ApproveAsync(Guid id, string role)
+    {
+        using var request = Request(HttpMethod.Post, $"/api/admin/registrations/{id}/approve"); request.Content = JsonContent.Create(new { role }); using var response = await http.SendAsync(request); response.EnsureSuccessStatusCode();
+    }
+    public async Task RejectAsync(Guid id)
+    {
+        using var request = Request(HttpMethod.Post, $"/api/admin/registrations/{id}/reject"); using var response = await http.SendAsync(request); response.EnsureSuccessStatusCode();
+    }
+    public async Task UpdateAdminAsync(Guid id, string role, bool enabled)
+    {
+        using var request = Request(HttpMethod.Put, $"/api/admin/users/{id}"); request.Content = JsonContent.Create(new { role, enabled }); using var response = await http.SendAsync(request); response.EnsureSuccessStatusCode();
     }
 }

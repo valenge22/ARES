@@ -43,6 +43,22 @@ public sealed class ControlAuthClient
         return Apply(auth);
     }
 
+    public async Task<(bool Success, string Message)> RegisterAsync(string name, string email, string password, string invitationCode, CancellationToken cancellationToken = default)
+    {
+        using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
+        using HttpResponseMessage response = await http.PostAsJsonAsync($"{serverUrl().TrimEnd('/')}/api/auth/register",
+            new { displayName = name, email, password, invitationCode }, cancellationToken);
+        ApiMessage? message = await response.Content.ReadFromJsonAsync<ApiMessage>(cancellationToken);
+        return (response.IsSuccessStatusCode, message?.Message ?? message?.Error ?? (response.IsSuccessStatusCode ? "Cuenta creada." : "No se pudo crear la cuenta."));
+    }
+
+    public async Task RecoverAsync(string email, CancellationToken cancellationToken = default)
+    {
+        using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
+        using HttpResponseMessage response = await http.PostAsJsonAsync($"{serverUrl().TrimEnd('/')}/api/auth/recover", new { email }, cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
     public async Task<string> GetAccessTokenAsync(CancellationToken cancellationToken = default)
     {
         if (!string.IsNullOrWhiteSpace(accessToken) && expiresUtc > DateTimeOffset.UtcNow.AddMinutes(2)) return accessToken;
@@ -95,6 +111,8 @@ public sealed class ControlAuthClient
             return await base.SendAsync(request, cancellationToken);
         }
     }
+
+    private sealed class ApiMessage { public string? Message { get; set; } public string? Error { get; set; } }
 }
 
 public sealed class AuthResponse
@@ -111,4 +129,23 @@ public sealed class AuthenticatedControlUser
     public string Email { get; set; } = "";
     public string DisplayName { get; set; } = "";
     public string Role { get; set; } = "";
+}
+
+public sealed class RegistrationRequestInfo
+{
+    public Guid UserId { get; set; }
+    public string Email { get; set; } = "";
+    public string DisplayName { get; set; } = "";
+    public string Status { get; set; } = "";
+    public DateTimeOffset RequestedAt { get; set; }
+    public DateTimeOffset? ReviewedAt { get; set; }
+}
+
+public sealed class AdminUserInfo
+{
+    public Guid UserId { get; set; }
+    public string Email { get; set; } = "";
+    public string DisplayName { get; set; } = "";
+    public string Role { get; set; } = "";
+    public bool Enabled { get; set; }
 }

@@ -574,6 +574,11 @@ namespace AdministracionEmpleados
                 estado.Text = lblConexion.Text.StartsWith("Error") ? lblConexion.Text : "Configuración guardada. Conexión correcta.";
             };
             contenido.Controls.Add(guardar);
+            if (AresControlAuth.Client.User?.Role == "Owner")
+            {
+                var usuarios = new Button { Text = "Administrar usuarios", Width = 180, Height = 38, Margin = new Padding(0, 12, 0, 0), FlatStyle = FlatStyle.Flat, BackColor = Color.FromArgb(124, 58, 237), ForeColor = Color.White };
+                usuarios.Click += async (_, _) => await MostrarUsuariosAsync(); contenido.Controls.Add(usuarios);
+            }
             var cerrarSesion = new Button { Text = "Cerrar sesión", Width = 150, Height = 38, Margin = new Padding(0, 12, 0, 0), FlatStyle = FlatStyle.Flat };
             cerrarSesion.Click += (_, _) => { AresControlAuth.Client.Logout(); Application.Restart(); Environment.Exit(0); };
             contenido.Controls.Add(cerrarSesion);
@@ -581,6 +586,46 @@ namespace AdministracionEmpleados
             tarjeta.Controls.Add(contenido);
             tarjeta.Controls.Add(titulo);
             return tarjeta;
+        }
+
+        private async Task MostrarUsuariosAsync()
+        {
+            using var dialog = new Form { Text = "Usuarios del panel ARES", Width = 900, Height = 620, StartPosition = FormStartPosition.CenterParent };
+            var tabs = new TabControl { Dock = DockStyle.Fill };
+            var pendingPage = new TabPage("Solicitudes pendientes"); var usersPage = new TabPage("Usuarios autorizados");
+            tabs.TabPages.Add(pendingPage); tabs.TabPages.Add(usersPage); dialog.Controls.Add(tabs);
+
+            async Task LoadAsync()
+            {
+                pendingPage.Controls.Clear(); usersPage.Controls.Clear();
+                List<ARES.Shared.Servicios.RegistrationRequestInfo> requests = await discoveryService.ObtenerSolicitudesRegistroAsync();
+                var pending = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.TopDown, WrapContents = false, AutoScroll = true, Padding = new Padding(15) };
+                foreach (var item in requests.Where(x => x.Status == "Pending"))
+                {
+                    var role = new ComboBox { Width = 140, DropDownStyle = ComboBoxStyle.DropDownList }; role.Items.AddRange(["Administrator", "Supervisor", "Viewer"]); role.SelectedIndex = 1;
+                    var approve = new Button { Text = "Aprobar", Width = 90 }; var reject = new Button { Text = "Rechazar", Width = 90 };
+                    var row = new FlowLayoutPanel { Width = 820, Height = 48, Controls = { new Label { Text = $"{item.DisplayName}\n{item.Email}", Width = 360, Height = 42 }, role, approve, reject } };
+                    approve.Click += async (_, _) => { await discoveryService.AprobarRegistroAsync(item.UserId, role.Text); await LoadAsync(); };
+                    reject.Click += async (_, _) => { await discoveryService.RechazarRegistroAsync(item.UserId); await LoadAsync(); };
+                    pending.Controls.Add(row);
+                }
+                if (pending.Controls.Count == 0) pending.Controls.Add(new Label { Text = "No hay solicitudes pendientes.", AutoSize = true }); pendingPage.Controls.Add(pending);
+
+                var users = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.TopDown, WrapContents = false, AutoScroll = true, Padding = new Padding(15) };
+                foreach (var item in await discoveryService.ObtenerUsuariosPanelAsync())
+                {
+                    var role = new ComboBox { Width = 140, DropDownStyle = ComboBoxStyle.DropDownList, Enabled = item.Role != "Owner" }; role.Items.AddRange(["Administrator", "Supervisor", "Viewer"]); role.SelectedItem = item.Role;
+                    var toggle = new Button { Text = item.Enabled ? "Suspender" : "Habilitar", Width = 100, Enabled = item.Role != "Owner" };
+                    var save = new Button { Text = "Guardar rol", Width = 100, Enabled = item.Role != "Owner" };
+                    var row = new FlowLayoutPanel { Width = 820, Height = 48, Controls = { new Label { Text = $"{item.DisplayName}\n{item.Email}", Width = 360, Height = 42 }, role, save, toggle } };
+                    save.Click += async (_, _) => { await discoveryService.ActualizarUsuarioPanelAsync(item.UserId, role.Text, item.Enabled); await LoadAsync(); };
+                    toggle.Click += async (_, _) => { await discoveryService.ActualizarUsuarioPanelAsync(item.UserId, item.Role, !item.Enabled); await LoadAsync(); };
+                    users.Controls.Add(row);
+                }
+                usersPage.Controls.Add(users);
+            }
+            try { await LoadAsync(); dialog.ShowDialog(this); }
+            catch (Exception ex) { MessageBox.Show(ex.Message, "ARES", MessageBoxButtons.OK, MessageBoxIcon.Error); }
         }
 
         private static Panel CrearTarjeta() => new()

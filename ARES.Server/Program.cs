@@ -19,6 +19,7 @@ await persistence.EnsureOwnerAsync(
     builder.Configuration["ARES_OWNER_USER_ID"] ?? Environment.GetEnvironmentVariable("ARES_OWNER_USER_ID"),
     builder.Configuration["ARES_OWNER_NAME"] ?? Environment.GetEnvironmentVariable("ARES_OWNER_NAME"));
 var authService = new AresAuthService(builder.Configuration, persistence);
+string registrationCode = builder.Configuration["ARES_REGISTRATION_CODE"] ?? Environment.GetEnvironmentVariable("ARES_REGISTRATION_CODE") ?? "";
 
 string apiKey = builder.Configuration["ARES_API_KEY"]
     ?? Environment.GetEnvironmentVariable("ARES_API_KEY")
@@ -33,8 +34,8 @@ string updateVersionPath = Path.Combine(AppContext.BaseDirectory, "data", "agent
 string controlSessionsPath = Path.Combine(AppContext.BaseDirectory, "data", "control-sessions.json");
 string controlWindowsPackagePath = Path.Combine(AppContext.BaseDirectory, "data", "control-windows-update.zip");
 string controlMacPackagePath = Path.Combine(AppContext.BaseDirectory, "data", "control-macos-update.pkg");
-string latestWindowsControlVersion = "1.3.1";
-string latestMacControlVersion = "1.2.0";
+string latestWindowsControlVersion = "1.4.0";
+string latestMacControlVersion = "1.3.0";
 Directory.CreateDirectory(Path.GetDirectoryName(dataPath)!);
 
 var agents = new ConcurrentDictionary<string, AgentStatus>(StringComparer.OrdinalIgnoreCase);
@@ -63,8 +64,12 @@ app.Use(async (context, next) =>
 {
     bool publicPath = context.Request.Path.StartsWithSegments("/health") ||
         context.Request.Path.StartsWithSegments("/solicitar") ||
+        context.Request.Path.StartsWithSegments("/auth") ||
         context.Request.Path.Equals("/api/auth/login") ||
-        context.Request.Path.Equals("/api/auth/refresh");
+        context.Request.Path.Equals("/api/auth/refresh") ||
+        context.Request.Path.Equals("/api/auth/register") ||
+        context.Request.Path.Equals("/api/auth/recover") ||
+        context.Request.Path.Equals("/api/auth/update-password");
     bool validApiKey = context.Request.Headers.TryGetValue("X-ARES-Key", out var supplied) && supplied == apiKey;
     AuthenticatedAdmin? admin = null;
     string authorization = context.Request.Headers.Authorization.ToString();
@@ -74,6 +79,12 @@ app.Use(async (context, next) =>
     {
         context.Response.StatusCode = StatusCodes.Status401Unauthorized;
         await context.Response.WriteAsJsonAsync(new { error = "Sesión ARES inválida o vencida." });
+        return;
+    }
+    if (admin is not null && !CanAccess(admin.Role, context.Request.Method, context.Request.Path))
+    {
+        context.Response.StatusCode = StatusCodes.Status403Forbidden;
+        await context.Response.WriteAsJsonAsync(new { error = "Tu rol no tiene permiso para realizar esta acción." });
         return;
     }
     if (admin is not null) context.Items["AresAdmin"] = admin;
@@ -103,6 +114,68 @@ app.MapPost("/api/auth/refresh", async (RefreshRequest request, CancellationToke
 });
 
 app.MapGet("/api/auth/me", (HttpContext context) => Results.Ok((AuthenticatedAdmin)context.Items["AresAdmin"]!));
+
+app.MapPost("/api/auth/register", async (RegisterRequest request, HttpRequest httpRequest, CancellationToken cancellationToken) =>
+{
+    if (registrationCode.Length < 8 || request.InvitationCode.Length != registrationCode.Length ||
+        !CryptographicOperations.FixedTimeEquals(Encoding.UTF8.GetBytes(request.InvitationCode), Encoding.UTF8.GetBytes(registrationCode)))
+        return Results.Json(new { error = "Código de invitación inválido." }, statusCode: 403);
+    string name = request.DisplayName.Trim(); string email = request.Email.Trim();
+    if (name.Length is < 2 or > 80 || !email.Contains('@') || request.Password.Length < 8)
+        return Results.BadRequest(new { error = "Revisá el nombre, correo y contraseña (mínimo 8 caracteres)." });
+    string origin = $"{httpRequest.Scheme}://{httpRequest.Host}";
+    Guid? userId = await authService.SignUpAsync(email, request.Password, name, $"{origin}/auth/confirmed", cancellationToken);
+    if (!userId.HasValue) return Results.BadRequest(new { error = "No se pudo crear la cuenta. Es posible que el correo ya exista." });
+    await persistence.RegisterPendingAsync(userId.Value, email, name);
+    return Results.Ok(new { created = true, pendingApproval = true, message = "Revisá tu correo y esperá la aprobación del propietario." });
+});
+
+app.MapPost("/api/auth/recover", async (RecoverRequest request, HttpRequest httpRequest, CancellationToken cancellationToken) =>
+{
+    string origin = $"{httpRequest.Scheme}://{httpRequest.Host}";
+    await authService.RecoverAsync(request.Email.Trim(), $"{origin}/auth/reset", cancellationToken);
+    return Results.Ok(new { sent = true });
+});
+
+app.MapPost("/api/auth/update-password", async (UpdatePasswordRequest request, CancellationToken cancellationToken) =>
+{
+    if (request.Password.Length < 8) return Results.BadRequest(new { error = "La contraseña debe tener al menos 8 caracteres." });
+    return await authService.UpdatePasswordAsync(request.AccessToken, request.Password, cancellationToken) ? Results.Ok(new { updated = true }) : Results.BadRequest(new { error = "El enlace venció o no es válido." });
+});
+
+app.MapGet("/auth/confirmed", () => Results.Content("""
+    <!doctype html><html lang="es"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>ARES</title>
+    <style>body{font:16px Segoe UI,Arial;background:#0f172a;color:white;display:grid;place-items:center;min-height:100vh}main{background:#172554;padding:36px;border-radius:18px;text-align:center}h1{color:#38bdf8}</style>
+    <main><h1>ARES</h1><h2>Correo confirmado</h2><p>Tu cuenta quedó pendiente de aprobación por el propietario.</p></main></html>
+    """, "text/html; charset=utf-8"));
+
+app.MapGet("/auth/reset", () => Results.Content("""
+    <!doctype html><html lang="es"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>ARES · Nueva contraseña</title>
+    <style>body{font:16px Segoe UI,Arial;background:#0f172a;color:white;display:grid;place-items:center;min-height:100vh}main{width:min(380px,85vw);background:#172554;padding:32px;border-radius:18px}h1{color:#38bdf8}input,button{box-sizing:border-box;width:100%;padding:12px;margin:8px 0;border-radius:8px;border:0}button{background:#2563eb;color:white;font-weight:bold}</style>
+    <main><h1>ARES</h1><h2>Nueva contraseña</h2><input id="p" type="password" minlength="8" placeholder="Mínimo 8 caracteres"><button onclick="save()">Guardar contraseña</button><p id="m"></p></main>
+    <script>async function save(){const h=new URLSearchParams(location.hash.substring(1));const token=h.get('access_token');const p=document.getElementById('p').value;const r=await fetch('/api/auth/update-password',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({accessToken:token,password:p})});document.getElementById('m').textContent=r.ok?'Contraseña actualizada. Ya podés volver a ARES.':'El enlace venció o la contraseña no es válida.'}</script></html>
+    """, "text/html; charset=utf-8"));
+
+app.MapGet("/api/admin/registrations", async (HttpContext context) =>
+    IsOwner(context) ? Results.Ok(await persistence.GetRegistrationsAsync()) : Results.Forbid());
+app.MapGet("/api/admin/users", async (HttpContext context) =>
+    IsOwner(context) ? Results.Ok(await persistence.GetAdminsAsync()) : Results.Forbid());
+app.MapPost("/api/admin/registrations/{id:guid}/approve", async (Guid id, ApproveRegistrationRequest request, HttpContext context) =>
+{
+    if (!IsOwner(context)) return Results.Forbid();
+    if (!ValidRole(request.Role) || request.Role == "Owner") return Results.BadRequest(new { error = "Rol inválido." });
+    return await persistence.ApproveAsync(id, request.Role, CurrentAdmin(context).UserId) ? Results.Ok(new { approved = true }) : Results.NotFound();
+});
+app.MapPost("/api/admin/registrations/{id:guid}/reject", async (Guid id, HttpContext context) =>
+{
+    if (!IsOwner(context)) return Results.Forbid(); await persistence.ReviewRegistrationAsync(id, "Rejected", CurrentAdmin(context).UserId); return Results.Ok(new { rejected = true });
+});
+app.MapPut("/api/admin/users/{id:guid}", async (Guid id, UpdateAdminRequest request, HttpContext context) =>
+{
+    if (!IsOwner(context)) return Results.Forbid();
+    if (!ValidRole(request.Role) || request.Role == "Owner") return Results.BadRequest(new { error = "Rol inválido." });
+    return await persistence.UpdateAdminAsync(id, request.Role, request.Enabled) ? Results.Ok(new { updated = true }) : Results.NotFound();
+});
 
 app.MapPost("/api/control-sessions/heartbeat", async (ControlSessionHeartbeat heartbeat, HttpRequest httpRequest) =>
 {
@@ -631,4 +704,23 @@ DateTimeOffset? CalcularProximoCambio(string agentId)
     DateTimeOffset now = DateTimeOffset.UtcNow;
     return schedule.Horarios.Where(x => x.AgentId.Equals(agentId, StringComparison.OrdinalIgnoreCase))
         .SelectMany(x => new[] { x.InicioUtc, x.FinUtc }).Where(x => x > now).OrderBy(x => x).Cast<DateTimeOffset?>().FirstOrDefault();
+}
+
+AuthenticatedAdmin CurrentAdmin(HttpContext context) => (AuthenticatedAdmin)context.Items["AresAdmin"]!;
+bool IsOwner(HttpContext context) => context.Items["AresAdmin"] is AuthenticatedAdmin admin && admin.Role == "Owner";
+bool ValidRole(string role) => role is "Owner" or "Administrator" or "Supervisor" or "Viewer";
+bool CanAccess(string role, string method, PathString path)
+{
+    if (role is "Owner" or "Administrator") return true;
+    if (HttpMethods.IsGet(method)) return true;
+    if (path.Equals("/api/control-sessions/heartbeat")) return true;
+    if (role == "Viewer") return false;
+    // Supervisor: operación cotidiana de equipos, sin administración global,
+    // publicación de horarios, limpieza ni distribución de software.
+    string value = path.Value ?? "";
+    return value.StartsWith("/api/agents/", StringComparison.OrdinalIgnoreCase) &&
+        (value.EndsWith("/restriction", StringComparison.OrdinalIgnoreCase) ||
+         value.EndsWith("/override", StringComparison.OrdinalIgnoreCase) ||
+         value.EndsWith("/name", StringComparison.OrdinalIgnoreCase) ||
+         value.EndsWith("/group", StringComparison.OrdinalIgnoreCase));
 }

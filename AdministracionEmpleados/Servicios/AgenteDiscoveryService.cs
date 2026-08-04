@@ -1,4 +1,5 @@
 using ARES.Shared.Modelos;
+using ARES.Shared.Servicios;
 using System.Net.Http.Json;
 using System.Security.Cryptography;
 using System.Text;
@@ -193,5 +194,32 @@ public sealed class AgenteDiscoveryService
             $"{configuracion.ServerUrl.TrimEnd('/')}/api/agents/{agentId}/name",
             new RenameAgentRequest { Nombre = nombre }, cancelacion);
         respuesta.EnsureSuccessStatusCode();
+    }
+
+    public async Task<List<RegistrationRequestInfo>> ObtenerSolicitudesRegistroAsync(CancellationToken cancelacion = default)
+    {
+        using HttpClient client = CrearCliente();
+        return await client.GetFromJsonAsync<List<RegistrationRequestInfo>>($"{AresSettings.Cargar().ServerUrl.TrimEnd('/')}/api/admin/registrations", cancelacion) ?? [];
+    }
+
+    public async Task<List<AdminUserInfo>> ObtenerUsuariosPanelAsync(CancellationToken cancelacion = default)
+    {
+        using HttpClient client = CrearCliente();
+        return await client.GetFromJsonAsync<List<AdminUserInfo>>($"{AresSettings.Cargar().ServerUrl.TrimEnd('/')}/api/admin/users", cancelacion) ?? [];
+    }
+
+    public async Task AprobarRegistroAsync(Guid id, string role, CancellationToken cancelacion = default)
+    {
+        using HttpClient client = CrearCliente(); using HttpResponseMessage response = await client.PostAsJsonAsync($"{AresSettings.Cargar().ServerUrl.TrimEnd('/')}/api/admin/registrations/{id}/approve", new { role }, cancelacion); response.EnsureSuccessStatusCode();
+    }
+
+    public async Task RechazarRegistroAsync(Guid id, CancellationToken cancelacion = default)
+    {
+        using HttpClient client = CrearCliente(); using HttpResponseMessage response = await client.PostAsync($"{AresSettings.Cargar().ServerUrl.TrimEnd('/')}/api/admin/registrations/{id}/reject", null, cancelacion); response.EnsureSuccessStatusCode();
+    }
+
+    public async Task ActualizarUsuarioPanelAsync(Guid id, string role, bool enabled, CancellationToken cancelacion = default)
+    {
+        using HttpClient client = CrearCliente(); using HttpResponseMessage response = await client.PutAsJsonAsync($"{AresSettings.Cargar().ServerUrl.TrimEnd('/')}/api/admin/users/{id}", new { role, enabled }, cancelacion); response.EnsureSuccessStatusCode();
     }
 }

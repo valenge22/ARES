@@ -15,6 +15,9 @@ builder.WebHost.ConfigureKestrel(options => options.Limits.MaxRequestBodySize = 
 var app = builder.Build();
 var persistence = new AresPersistence(builder.Configuration);
 await persistence.InitializeAsync();
+await persistence.EnsureOwnerAsync(
+    builder.Configuration["ARES_OWNER_USER_ID"] ?? Environment.GetEnvironmentVariable("ARES_OWNER_USER_ID"),
+    builder.Configuration["ARES_OWNER_NAME"] ?? Environment.GetEnvironmentVariable("ARES_OWNER_NAME"));
 
 string apiKey = builder.Configuration["ARES_API_KEY"]
     ?? Environment.GetEnvironmentVariable("ARES_API_KEY")

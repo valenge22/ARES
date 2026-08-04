@@ -54,7 +54,42 @@ internal sealed class AresPersistence
                 state_value jsonb not null,
                 updated_at timestamptz not null default now()
             );
+
+            create table if not exists ares_admin_users (
+                user_id uuid primary key,
+                display_name varchar(80) not null,
+                role varchar(20) not null,
+                enabled boolean not null default true,
+                created_at timestamptz not null default now(),
+                updated_at timestamptz not null default now(),
+                constraint ck_ares_admin_users_role
+                    check (role in ('Owner', 'Administrator', 'Supervisor', 'Viewer'))
+            );
             """;
+        await command.ExecuteNonQueryAsync();
+    }
+
+    public async Task EnsureOwnerAsync(string? userId, string? displayName)
+    {
+        if (!UsesDatabase || string.IsNullOrWhiteSpace(userId)) return;
+        if (!Guid.TryParse(userId, out Guid ownerId))
+            throw new InvalidOperationException("ARES_OWNER_USER_ID no contiene un UUID valido.");
+
+        string name = string.IsNullOrWhiteSpace(displayName) ? "ADMINISTRADOR" : displayName.Trim();
+        if (name.Length > 80) name = name[..80];
+
+        await using var connection = new NpgsqlConnection(connectionString);
+        await connection.OpenAsync();
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            insert into ares_admin_users (user_id, display_name, role, enabled, updated_at)
+            values (@userId, @displayName, 'Owner', true, now())
+            on conflict (user_id) do update
+            set display_name = excluded.display_name,
+                role = 'Owner', enabled = true, updated_at = now()
+            """;
+        command.Parameters.AddWithValue("userId", ownerId);
+        command.Parameters.AddWithValue("displayName", name);
         await command.ExecuteNonQueryAsync();
     }
 

@@ -15,7 +15,17 @@ persistente; los agentes y paneles no se conectan directamente a Supabase.
 
 4. Desplegar nuevamente el servicio.
 5. Consultar `/health`. Al iniciar, ARES crea automáticamente la tabla
-   `public.ares_state`.
+   `public.ares_state` y la tabla de administradores `public.ares_admin_users`.
+
+## Crear el propietario inicial
+
+Crear el usuario en **Supabase > Authentication > Users** y agregar en Render:
+
+- `ARES_OWNER_USER_ID`: UUID del usuario creado en Supabase Auth.
+- `ARES_OWNER_NAME`: nombre visible del propietario.
+
+Al desplegar, ARES registra o actualiza ese usuario con el rol `Owner`. La
+contraseña permanece exclusivamente en Supabase Auth.
 
 No guardar la cadena de conexión en `appsettings.json`, instaladores, capturas ni
 GitHub. Si la variable no está configurada, ARES conserva el almacenamiento JSON

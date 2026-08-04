@@ -61,7 +61,8 @@ namespace AdministracionEmpleados
                 IReadOnlyList<AgenteDetectado> detectados = await discoveryService.BuscarAsync(
                     empleadoService.ObtenerEmpleados().Select(e => e.Computadora.DireccionIP));
                 empleadoService.ActualizarEquiposDetectados(detectados);
-                await discoveryService.RegistrarSesionPanelAsync();
+                ControlSessionHeartbeatResponse panelPolicy = await discoveryService.RegistrarSesionPanelAsync();
+                if (panelPolicy.ActualizarAhora) _ = ControlCenterUpdater.StartAsync(panelPolicy.Url);
                 sesionesPanel = await discoveryService.ObtenerSesionesPanelAsync();
 
                 int conectados = detectados.Count;
@@ -427,7 +428,10 @@ namespace AdministracionEmpleados
             var actividad = CrearTarjeta();
             actividad.Margin = new Padding(8, 20, 8, 0);
             actividad.Controls.Add(CrearTablaSesionesPanel());
-            actividad.Controls.Add(CrearEncabezadoTarjeta("Sesiones activas del Centro de Control", "Nombre editable, usuario, equipo, plataforma y última conexión"));
+            var sessionsHeader = CrearEncabezadoTarjeta("Sesiones activas del Centro de Control", "Nombre editable, usuario, equipo, plataforma y última conexión");
+            var updateAll = new Button { Text = "Actualizar todos", Dock = DockStyle.Right, Width = 140, BackColor = Color.FromArgb(124, 58, 237), ForeColor = Color.White, FlatStyle = FlatStyle.Flat };
+            updateAll.FlatAppearance.BorderSize = 0; updateAll.Click += async (_, _) => await ActualizarSesionesPanelAsync(sesionesPanel.Where(x => x.ActualizacionDisponible).ToList());
+            sessionsHeader.Controls.Add(updateAll); actividad.Controls.Add(sessionsHeader);
             panel.Controls.Add(actividad, 0, 1);
             panel.SetColumnSpan(actividad, 4);
             return panel;
@@ -435,15 +439,19 @@ namespace AdministracionEmpleados
 
         private DataGridView CrearTablaSesionesPanel()
         {
-            var table = CrearListaSimple(new[] { "NOMBRE DE SESION", "USUARIO", "EQUIPO", "PLATAFORMA", "VERSION", "ULTIMA CONEXION" },
+            var table = CrearListaSimple(new[] { "NOMBRE DE SESION", "USUARIO", "EQUIPO", "PLATAFORMA", "VERSION", "ACTUALIZACION", "ULTIMA CONEXION" },
                 sesionesPanel.Select(x => new[] { x.Nombre, x.Usuario, x.Equipo, x.Plataforma, x.Version,
+                    x.ActualizacionDisponible ? $"Disponible {x.UltimaVersion}" : x.EstadoActualizacion,
                     x.UltimaConexionUtc.ToLocalTime().ToString("dd/MM/yyyy HH:mm:ss") }).ToList());
             table.Columns.Add(new DataGridViewButtonColumn { Name = "RenombrarSesion", HeaderText = "", Text = "Cambiar nombre", UseColumnTextForButtonValue = true });
+            table.Columns.Add(new DataGridViewButtonColumn { Name = "ActualizarSesion", HeaderText = "", FillWeight = 70 });
             for (int i = 0; i < table.Rows.Count && i < sesionesPanel.Count; i++) table.Rows[i].Tag = sesionesPanel[i];
             table.CellContentClick += async (_, e) =>
             {
-                if (e.RowIndex < 0 || table.Columns[e.ColumnIndex].Name != "RenombrarSesion" ||
-                    table.Rows[e.RowIndex].Tag is not ControlSessionStatus session) return;
+                if (e.RowIndex < 0 || table.Rows[e.RowIndex].Tag is not ControlSessionStatus session) return;
+                if (table.Columns[e.ColumnIndex].Name == "ActualizarSesion")
+                { if (session.ActualizacionDisponible) await ActualizarSesionesPanelAsync([session]); return; }
+                if (table.Columns[e.ColumnIndex].Name != "RenombrarSesion") return;
                 string? name = PedirNombreEquipo(session.Nombre); if (string.IsNullOrWhiteSpace(name)) return;
                 try
                 {
@@ -452,7 +460,28 @@ namespace AdministracionEmpleados
                 }
                 catch (Exception ex) { MessageBox.Show(ex.Message, "ARES", MessageBoxButtons.OK, MessageBoxIcon.Error); }
             };
+            for (int i = 0; i < table.Rows.Count && i < sesionesPanel.Count; i++)
+                table.Rows[i].Cells["ActualizarSesion"].Value = sesionesPanel[i].ActualizacionDisponible ? "Actualizar" : "Al dia";
             return table;
+        }
+
+        private async Task ActualizarSesionesPanelAsync(List<ControlSessionStatus> sessions)
+        {
+            if (sessions.Count == 0) { MessageBox.Show("Todos los paneles activos estan actualizados.", "ARES"); return; }
+            try
+            {
+                foreach (var platformGroup in sessions.GroupBy(x => x.Plataforma.Contains("mac", StringComparison.OrdinalIgnoreCase) ? "macos" : "windows"))
+                {
+                    bool mac = platformGroup.Key == "macos";
+                    using var dialog = new OpenFileDialog { Filter = mac ? "Instalador macOS (*.pkg)|*.pkg" : "Paquete Windows (*.zip)|*.zip",
+                        Title = mac ? "Selecciona el Centro de Control macOS nuevo" : "Selecciona el Centro de Control Windows nuevo" };
+                    if (dialog.ShowDialog(this) != DialogResult.OK) return;
+                    await discoveryService.CargarPaquetePanelAsync(platformGroup.Key, dialog.FileName);
+                }
+                await discoveryService.SolicitarActualizacionPanelesAsync(sessions.Select(x => x.Id));
+                MessageBox.Show($"Se enviaron {sessions.Count} ordenes de actualizacion.", "ARES", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            }
+            catch (Exception ex) { MessageBox.Show(ex.Message, "ARES", MessageBoxButtons.OK, MessageBoxIcon.Error); }
         }
 
         private Control CrearVistaSeguridad()

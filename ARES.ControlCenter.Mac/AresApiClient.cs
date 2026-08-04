@@ -8,7 +8,7 @@ namespace ARES.ControlCenter.Mac;
 internal sealed class AresApiClient
 {
     private static readonly string sessionId = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes($"{Environment.MachineName}|{Environment.UserName}|ARES.ControlCenter.Mac")))[..24];
-    private readonly HttpClient http = new() { Timeout = TimeSpan.FromSeconds(20) };
+    private readonly HttpClient http = new() { Timeout = TimeSpan.FromMinutes(5) };
     private MacSettings settings;
     public AresApiClient(MacSettings settings) => this.settings = settings;
     public void Update(MacSettings value) => settings = value;
@@ -72,14 +72,16 @@ internal sealed class AresApiClient
         using var request = Request(HttpMethod.Get, "/api/schedule"); using var response = await http.SendAsync(request); response.EnsureSuccessStatusCode();
         return await response.Content.ReadFromJsonAsync<ScheduleState>() ?? new();
     }
-    public async Task<int> HeartbeatControlSessionAsync()
+    public async Task<ControlSessionHeartbeatResponse> HeartbeatControlSessionAsync()
     {
         using var request = Request(HttpMethod.Post, "/api/control-sessions/heartbeat");
         request.Content = JsonContent.Create(new ControlSessionHeartbeat { Id = sessionId, Usuario = Environment.UserName,
-            Equipo = Environment.MachineName, Plataforma = "macOS", Version = typeof(AresApiClient).Assembly.GetName().Version?.ToString(3) ?? "" });
+            Equipo = Environment.MachineName, Plataforma = "macOS", Version = typeof(AresApiClient).Assembly.GetName().Version?.ToString(3) ?? "",
+            EstadoActualizacion = MacControlUpdater.Status });
         using var response = await http.SendAsync(request); response.EnsureSuccessStatusCode();
-        using var json = await System.Text.Json.JsonDocument.ParseAsync(await response.Content.ReadAsStreamAsync());
-        return json.RootElement.GetProperty("active").GetInt32();
+        ControlSessionHeartbeatResponse policy = await response.Content.ReadFromJsonAsync<ControlSessionHeartbeatResponse>() ?? new();
+        if (policy.ActualizarAhora) _ = MacControlUpdater.StartAsync(policy.Url, settings.ApiKey);
+        return policy;
     }
     public async Task<List<ControlSessionStatus>> ControlSessionsAsync()
     {
@@ -89,6 +91,16 @@ internal sealed class AresApiClient
     public async Task RenameControlSessionAsync(string id, string name)
     {
         using var request = Request(HttpMethod.Put, $"/api/control-sessions/{Uri.EscapeDataString(id)}/name"); request.Content = JsonContent.Create(new RenameAgentRequest { Nombre = name });
+        using var response = await http.SendAsync(request); response.EnsureSuccessStatusCode();
+    }
+    public async Task UploadControlPackageAsync(string platform, Stream stream, string fileName)
+    {
+        using var request = Request(HttpMethod.Post, $"/api/control-update/package/{platform}"); using var content = new MultipartFormDataContent();
+        content.Add(new StreamContent(stream), "file", fileName); request.Content = content; using var response = await http.SendAsync(request); response.EnsureSuccessStatusCode();
+    }
+    public async Task RequestControlUpdatesAsync(IEnumerable<string> ids)
+    {
+        using var request = Request(HttpMethod.Post, "/api/control-update/request"); request.Content = JsonContent.Create(new ControlUpdateRequest { SessionIds = ids.ToList() });
         using var response = await http.SendAsync(request); response.EnsureSuccessStatusCode();
     }
 }

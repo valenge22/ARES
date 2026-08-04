@@ -122,15 +122,15 @@ public sealed class AgenteDiscoveryService
         return cliente;
     }
 
-    public async Task<int> RegistrarSesionPanelAsync(CancellationToken cancelacion = default)
+    public async Task<ControlSessionHeartbeatResponse> RegistrarSesionPanelAsync(CancellationToken cancelacion = default)
     {
         using HttpClient cliente = CrearCliente();
         using HttpResponseMessage response = await cliente.PostAsJsonAsync($"{AresSettings.Cargar().ServerUrl.TrimEnd('/')}/api/control-sessions/heartbeat",
             new ControlSessionHeartbeat { Id = sessionId, Usuario = Environment.UserName, Equipo = Environment.MachineName,
-                Plataforma = "Windows", Version = typeof(AgenteDiscoveryService).Assembly.GetName().Version?.ToString(3) ?? "" }, cancelacion);
+                Plataforma = "Windows", Version = typeof(AgenteDiscoveryService).Assembly.GetName().Version?.ToString(3) ?? "",
+                EstadoActualizacion = ControlCenterUpdater.Status }, cancelacion);
         response.EnsureSuccessStatusCode();
-        using JsonDocument json = await JsonDocument.ParseAsync(await response.Content.ReadAsStreamAsync(cancelacion), cancellationToken: cancelacion);
-        return json.RootElement.GetProperty("active").GetInt32();
+        return await response.Content.ReadFromJsonAsync<ControlSessionHeartbeatResponse>(cancelacion) ?? new();
     }
 
     public async Task<List<ControlSessionStatus>> ObtenerSesionesPanelAsync(CancellationToken cancelacion = default)
@@ -143,6 +143,21 @@ public sealed class AgenteDiscoveryService
     {
         using HttpClient cliente = CrearCliente();
         using HttpResponseMessage response = await cliente.PutAsJsonAsync($"{AresSettings.Cargar().ServerUrl.TrimEnd('/')}/api/control-sessions/{id}/name", new RenameAgentRequest { Nombre = nombre }, cancelacion);
+        response.EnsureSuccessStatusCode();
+    }
+
+    public async Task CargarPaquetePanelAsync(string platform, string path, CancellationToken cancelacion = default)
+    {
+        AresSettings settings = AresSettings.Cargar(); using var client = new HttpClient { Timeout = TimeSpan.FromMinutes(5) };
+        client.DefaultRequestHeaders.Add("X-ARES-Key", settings.ApiKey); using var content = new MultipartFormDataContent();
+        await using FileStream stream = File.OpenRead(path); content.Add(new StreamContent(stream), "file", Path.GetFileName(path));
+        using HttpResponseMessage response = await client.PostAsync($"{settings.ServerUrl.TrimEnd('/')}/api/control-update/package/{platform}", content, cancelacion); response.EnsureSuccessStatusCode();
+    }
+
+    public async Task SolicitarActualizacionPanelesAsync(IEnumerable<string> sessionIds, CancellationToken cancelacion = default)
+    {
+        using HttpClient client = CrearCliente(); using HttpResponseMessage response = await client.PostAsJsonAsync(
+            $"{AresSettings.Cargar().ServerUrl.TrimEnd('/')}/api/control-update/request", new ControlUpdateRequest { SessionIds = sessionIds.ToList() }, cancelacion);
         response.EnsureSuccessStatusCode();
     }
 

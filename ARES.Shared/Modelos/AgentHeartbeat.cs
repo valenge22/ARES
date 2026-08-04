@@ -137,10 +137,27 @@ public class ControlSessionHeartbeat
     public string Plataforma { get; set; } = "";
     public string Version { get; set; } = "";
     public string Nombre { get; set; } = "";
+    public string EstadoActualizacion { get; set; } = "Al dia";
 }
 
 public sealed class ControlSessionStatus : ControlSessionHeartbeat
 {
     public DateTimeOffset UltimaConexionUtc { get; set; }
     public bool Activa { get; set; }
+    public bool ActualizacionSolicitada { get; set; }
+    public bool ActualizacionDisponible { get; set; }
+    public string UltimaVersion { get; set; } = "";
+}
+
+public sealed class ControlSessionHeartbeatResponse
+{
+    public int Activas { get; set; }
+    public bool ActualizarAhora { get; set; }
+    public string Version { get; set; } = "";
+    public string Url { get; set; } = "";
+}
+
+public sealed class ControlUpdateRequest
+{
+    public List<string> SessionIds { get; set; } = [];
 }

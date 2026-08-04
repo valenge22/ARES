@@ -11,6 +11,7 @@ using System.Net.Http.Json;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.Services.Configure<FormOptions>(options => options.MultipartBodyLengthLimit = 100 * 1024 * 1024);
+builder.WebHost.ConfigureKestrel(options => options.Limits.MaxRequestBodySize = 110 * 1024 * 1024);
 var app = builder.Build();
 
 string apiKey = builder.Configuration["ARES_API_KEY"]
@@ -24,6 +25,10 @@ string policiesPath = Path.Combine(AppContext.BaseDirectory, "data", "group-poli
 string updatePackagePath = Path.Combine(AppContext.BaseDirectory, "data", "agent-update.zip");
 string updateVersionPath = Path.Combine(AppContext.BaseDirectory, "data", "agent-update-version.txt");
 string controlSessionsPath = Path.Combine(AppContext.BaseDirectory, "data", "control-sessions.json");
+string controlWindowsPackagePath = Path.Combine(AppContext.BaseDirectory, "data", "control-windows-update.zip");
+string controlMacPackagePath = Path.Combine(AppContext.BaseDirectory, "data", "control-macos-update.pkg");
+string latestWindowsControlVersion = "1.2.3";
+string latestMacControlVersion = "1.1.3";
 Directory.CreateDirectory(Path.GetDirectoryName(dataPath)!);
 
 var agents = new ConcurrentDictionary<string, AgentStatus>(StringComparer.OrdinalIgnoreCase);
@@ -75,19 +80,30 @@ app.Use(async (context, next) =>
 
 app.MapGet("/health", () => Results.Ok(new { service = "ARES Server", status = "ok" }));
 
-app.MapPost("/api/control-sessions/heartbeat", async (ControlSessionHeartbeat heartbeat) =>
+app.MapPost("/api/control-sessions/heartbeat", async (ControlSessionHeartbeat heartbeat, HttpRequest httpRequest) =>
 {
     if (string.IsNullOrWhiteSpace(heartbeat.Id)) return Results.BadRequest();
     DateTimeOffset now = DateTimeOffset.UtcNow;
     controlSessions.AddOrUpdate(heartbeat.Id,
         _ => new ControlSessionStatus { Id = heartbeat.Id, Usuario = heartbeat.Usuario, Equipo = heartbeat.Equipo,
             Plataforma = heartbeat.Plataforma, Version = heartbeat.Version, Nombre = string.IsNullOrWhiteSpace(heartbeat.Nombre) ? $"{heartbeat.Usuario} @ {heartbeat.Equipo}" : heartbeat.Nombre,
-            UltimaConexionUtc = now, Activa = true },
+            EstadoActualizacion = heartbeat.EstadoActualizacion, UltimaConexionUtc = now, Activa = true },
         (_, current) => { current.Usuario = heartbeat.Usuario; current.Equipo = heartbeat.Equipo; current.Plataforma = heartbeat.Plataforma;
-            current.Version = heartbeat.Version; current.UltimaConexionUtc = now; current.Activa = true; return current; });
+            current.Version = heartbeat.Version;
+            string expected = heartbeat.Plataforma.Contains("mac", StringComparison.OrdinalIgnoreCase) ? latestMacControlVersion : latestWindowsControlVersion;
+            if (Version.TryParse(heartbeat.Version, out var installed) && Version.TryParse(expected, out var latest) && installed >= latest) current.EstadoActualizacion = "Actualizado";
+            else if (heartbeat.EstadoActualizacion is "Descargando" or "Instalando" or "Error") current.EstadoActualizacion = heartbeat.EstadoActualizacion;
+            current.UltimaConexionUtc = now; current.Activa = true; return current; });
     int count = controlSessions.Values.Count(x => x.UltimaConexionUtc >= now.AddSeconds(-35));
+    ControlSessionStatus currentSession = controlSessions[heartbeat.Id];
+    bool isMac = heartbeat.Plataforma.Contains("mac", StringComparison.OrdinalIgnoreCase);
+    string version = isMac ? latestMacControlVersion : latestWindowsControlVersion;
+    string packagePath = isMac ? controlMacPackagePath : controlWindowsPackagePath;
+    bool updateNow = currentSession.ActualizacionSolicitada && File.Exists(packagePath);
+    if (updateNow) { currentSession.ActualizacionSolicitada = false; currentSession.EstadoActualizacion = "Descargando"; }
     await GuardarSesionesPanelAsync();
-    return Results.Ok(new { active = count });
+    return Results.Ok(new ControlSessionHeartbeatResponse { Activas = count, ActualizarAhora = updateNow,
+        Version = version, Url = File.Exists(packagePath) ? $"{httpRequest.Scheme}://{httpRequest.Host}/api/control-update/download/{(isMac ? "macos" : "windows")}" : "" });
 });
 
 app.MapGet("/api/control-sessions", () =>
@@ -96,7 +112,12 @@ app.MapGet("/api/control-sessions", () =>
     return controlSessions.Values.Select(x => new ControlSessionStatus
     {
         Id = x.Id, Usuario = x.Usuario, Equipo = x.Equipo, Plataforma = x.Plataforma,
-        Version = x.Version, Nombre = x.Nombre, UltimaConexionUtc = x.UltimaConexionUtc, Activa = x.UltimaConexionUtc >= limit
+        Version = x.Version, Nombre = x.Nombre, EstadoActualizacion = x.EstadoActualizacion,
+        UltimaConexionUtc = x.UltimaConexionUtc, Activa = x.UltimaConexionUtc >= limit,
+        ActualizacionSolicitada = x.ActualizacionSolicitada,
+        UltimaVersion = x.Plataforma.Contains("mac", StringComparison.OrdinalIgnoreCase) ? latestMacControlVersion : latestWindowsControlVersion,
+        ActualizacionDisponible = Version.TryParse(x.Plataforma.Contains("mac", StringComparison.OrdinalIgnoreCase) ? latestMacControlVersion : latestWindowsControlVersion, out var latest)
+            && Version.TryParse(x.Version, out var installed) && latest > installed
     }).Where(x => x.Activa).OrderBy(x => x.Usuario);
 });
 
@@ -106,6 +127,46 @@ app.MapPut("/api/control-sessions/{id}/name", async (string id, RenameAgentReque
     string name = request.Nombre.Trim();
     if (name.Length is < 1 or > 60) return Results.BadRequest(new { error = "El nombre debe tener entre 1 y 60 caracteres." });
     session.Nombre = name; await GuardarSesionesPanelAsync(); return Results.Ok(new { updated = true, nombre = name });
+});
+
+app.MapPost("/api/control-update/package/{platform}", async (string platform, HttpRequest request) =>
+{
+    IFormCollection form = await request.ReadFormAsync(); IFormFile? file = form.Files.FirstOrDefault();
+    if (file is null || file.Length is < 1 or > 100_000_000) return Results.BadRequest(new { error = "Paquete invalido." });
+    bool mac = platform.Equals("macos", StringComparison.OrdinalIgnoreCase);
+    string target = mac ? controlMacPackagePath : controlWindowsPackagePath;
+    if (mac && !file.FileName.EndsWith(".pkg", StringComparison.OrdinalIgnoreCase)) return Results.BadRequest(new { error = "Selecciona el .pkg de macOS." });
+    if (!mac && !file.FileName.EndsWith(".zip", StringComparison.OrdinalIgnoreCase)) return Results.BadRequest(new { error = "Selecciona el ZIP de Windows." });
+    await using (FileStream output = File.Create(target)) await file.CopyToAsync(output);
+    if (!mac)
+    {
+        try
+        {
+            using ZipArchive archive = ZipFile.OpenRead(target);
+            if (!archive.Entries.Any(x => x.FullName.Replace('\\', '/').Equals("app/ARES.ControlCenter.exe", StringComparison.OrdinalIgnoreCase)))
+            { File.Delete(target); return Results.BadRequest(new { error = "El ZIP no contiene app/ARES.ControlCenter.exe." }); }
+        }
+        catch (InvalidDataException) { File.Delete(target); return Results.BadRequest(new { error = "ZIP invalido." }); }
+    }
+    return Results.Ok(new { platform, bytes = file.Length });
+}).DisableAntiforgery();
+
+app.MapPost("/api/control-update/request", async (ControlUpdateRequest request) =>
+{
+    int count = 0;
+    foreach (string id in request.SessionIds.Distinct(StringComparer.OrdinalIgnoreCase))
+        if (controlSessions.TryGetValue(id, out ControlSessionStatus? session))
+        { session.ActualizacionSolicitada = true; session.EstadoActualizacion = "Pendiente"; count++; }
+    await GuardarSesionesPanelAsync();
+    await RegistrarEventoAsync("SERVER", "Centro de Control", "ACTUALIZACION_PANELES_SOLICITADA", $"Se enviaron {count} ordenes de actualizacion.");
+    return Results.Ok(new { requested = count });
+});
+
+app.MapGet("/api/control-update/download/{platform}", (string platform) =>
+{
+    bool mac = platform.Equals("macos", StringComparison.OrdinalIgnoreCase);
+    string path = mac ? controlMacPackagePath : controlWindowsPackagePath;
+    return File.Exists(path) ? Results.File(path, "application/octet-stream", mac ? "ARES-Control.pkg" : "ARES-Control.zip") : Results.NotFound();
 });
 
 app.MapPost("/api/agents/heartbeat", async (AgentHeartbeat heartbeat, HttpRequest httpRequest) =>

@@ -4,6 +4,7 @@ using Avalonia.Controls;
 using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Threading;
+using Avalonia.Platform.Storage;
 
 namespace ARES.ControlCenter.Mac;
 
@@ -70,10 +71,10 @@ public sealed class MainWindow : Window
         try
         {
             title.Text = "Equipos"; if (showLoading) status.Text = "Actualizando…";
-            int panels = await api.HeartbeatControlSessionAsync();
+            ControlSessionHeartbeatResponse panelPolicy = await api.HeartbeatControlSessionAsync();
             var agents = await api.AgentsAsync(); content.Children.Clear();
             foreach (var agent in agents) content.Children.Add(AgentCard(agent));
-            status.Text = $"{agents.Count(a => a.EstaEnLinea)} de {agents.Count} equipos conectados · {panels} paneles activos · {DateTime.Now:HH:mm:ss}";
+            status.Text = $"{agents.Count(a => a.EstaEnLinea)} de {agents.Count} equipos conectados · {panelPolicy.Activas} paneles activos · {DateTime.Now:HH:mm:ss}";
             if (agents.Count == 0) content.Children.Add(new TextBlock { Text = "No hay equipos registrados.", Margin = new Thickness(12), Foreground = Brush.Parse("#64748B") });
         }
         catch (Exception ex) { status.Text = $"Error: {ex.Message}"; }
@@ -142,9 +143,12 @@ public sealed class MainWindow : Window
             {
                 var rename = new Button { Content = "Cambiar nombre", Padding = new Thickness(12, 7) };
                 rename.Click += async (_, _) => await RenameControlSessionAsync(session);
+                var update = new Button { Content = session.ActualizacionDisponible ? $"Actualizar a {session.UltimaVersion}" : session.EstadoActualizacion, IsEnabled = session.ActualizacionDisponible, Padding = new Thickness(12, 7) };
+                update.Click += async (_, _) => await UpdateControlSessionAsync(session);
                 var details = new StackPanel { Spacing = 4, Children = { new TextBlock { Text = session.Nombre, FontSize = 17, FontWeight = FontWeight.Bold },
                     new TextBlock { Text = $"{session.Usuario} · {session.Equipo} · {session.Plataforma} · v{session.Version}", Foreground = Brush.Parse("#64748B") },
-                    new TextBlock { Text = $"Última conexión: {session.UltimaConexionUtc.ToLocalTime():dd/MM/yyyy HH:mm:ss}", Foreground = Brush.Parse("#64748B") }, rename } };
+                    new TextBlock { Text = $"Última conexión: {session.UltimaConexionUtc.ToLocalTime():dd/MM/yyyy HH:mm:ss}", Foreground = Brush.Parse("#64748B") },
+                    new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Children = { rename, update } } } };
                 content.Children.Add(new Border { Background = Brushes.White, CornerRadius = new CornerRadius(9), Padding = new Thickness(14), Child = details });
             }
         }
@@ -159,6 +163,19 @@ public sealed class MainWindow : Window
         dialog.Content = new StackPanel { Margin = new Thickness(24), Spacing = 12, Children = { new TextBlock { Text = "Nombre visible de esta sesión" }, input, save } };
         save.Click += async (_, _) => { string name = input.Text?.Trim() ?? ""; if (name.Length == 0) return; await api.RenameControlSessionAsync(session.Id, name); dialog.Close(); };
         await dialog.ShowDialog(this); await ShowControlSessionsAsync();
+    }
+
+    private async Task UpdateControlSessionAsync(ControlSessionStatus session)
+    {
+        bool mac = session.Plataforma.Contains("mac", StringComparison.OrdinalIgnoreCase);
+        IReadOnlyList<IStorageFile> files = await StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
+        {
+            Title = mac ? "Seleccionar instalador macOS" : "Seleccionar paquete Windows", AllowMultiple = false,
+            FileTypeFilter = [new FilePickerFileType(mac ? "Instalador PKG" : "Paquete ZIP") { Patterns = mac ? ["*.pkg"] : ["*.zip"] }]
+        });
+        IStorageFile? file = files.FirstOrDefault(); if (file is null) return;
+        await using Stream stream = await file.OpenReadAsync(); await api.UploadControlPackageAsync(mac ? "macos" : "windows", stream, file.Name);
+        await api.RequestControlUpdatesAsync([session.Id]); status.Text = $"Actualización enviada a {session.Nombre}.";
     }
 
     private async Task ShowSettingsAsync()

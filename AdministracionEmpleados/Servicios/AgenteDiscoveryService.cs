@@ -222,4 +222,8 @@ public sealed class AgenteDiscoveryService
     {
         using HttpClient client = CrearCliente(); using HttpResponseMessage response = await client.PutAsJsonAsync($"{AresSettings.Cargar().ServerUrl.TrimEnd('/')}/api/admin/users/{id}", new { role, enabled }, cancelacion); response.EnsureSuccessStatusCode();
     }
+    public async Task EliminarUsuarioPanelAsync(Guid id, CancellationToken cancelacion = default)
+    {
+        using HttpClient client = CrearCliente(); using HttpResponseMessage response = await client.DeleteAsync($"{AresSettings.Cargar().ServerUrl.TrimEnd('/')}/api/admin/users/{id}", cancelacion); response.EnsureSuccessStatusCode();
+    }
 }

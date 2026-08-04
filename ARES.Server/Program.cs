@@ -34,8 +34,8 @@ string updateVersionPath = Path.Combine(AppContext.BaseDirectory, "data", "agent
 string controlSessionsPath = Path.Combine(AppContext.BaseDirectory, "data", "control-sessions.json");
 string controlWindowsPackagePath = Path.Combine(AppContext.BaseDirectory, "data", "control-windows-update.zip");
 string controlMacPackagePath = Path.Combine(AppContext.BaseDirectory, "data", "control-macos-update.pkg");
-string latestWindowsControlVersion = "1.4.0";
-string latestMacControlVersion = "1.3.0";
+string latestWindowsControlVersion = "1.4.1";
+string latestMacControlVersion = "1.3.1";
 Directory.CreateDirectory(Path.GetDirectoryName(dataPath)!);
 
 var agents = new ConcurrentDictionary<string, AgentStatus>(StringComparer.OrdinalIgnoreCase);
@@ -175,6 +175,11 @@ app.MapPut("/api/admin/users/{id:guid}", async (Guid id, UpdateAdminRequest requ
     if (!IsOwner(context)) return Results.Forbid();
     if (!ValidRole(request.Role) || request.Role == "Owner") return Results.BadRequest(new { error = "Rol inválido." });
     return await persistence.UpdateAdminAsync(id, request.Role, request.Enabled) ? Results.Ok(new { updated = true }) : Results.NotFound();
+});
+app.MapDelete("/api/admin/users/{id:guid}", async (Guid id, HttpContext context) =>
+{
+    if (!IsOwner(context)) return Results.Forbid();
+    return await persistence.RemoveAdminAsync(id) ? Results.Ok(new { removed = true }) : Results.NotFound();
 });
 
 app.MapPost("/api/control-sessions/heartbeat", async (ControlSessionHeartbeat heartbeat, HttpRequest httpRequest) =>

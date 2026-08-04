@@ -203,6 +203,13 @@ internal sealed class AresPersistence
         command.Parameters.AddWithValue("id", userId); command.Parameters.AddWithValue("role", role); command.Parameters.AddWithValue("enabled", enabled); return await command.ExecuteNonQueryAsync() > 0;
     }
 
+    public async Task<bool> RemoveAdminAsync(Guid userId)
+    {
+        await using var connection = new NpgsqlConnection(connectionString); await connection.OpenAsync();
+        await using var command = connection.CreateCommand(); command.CommandText = "delete from ares_admin_users where user_id=@id and role <> 'Owner'";
+        command.Parameters.AddWithValue("id", userId); return await command.ExecuteNonQueryAsync() > 0;
+    }
+
     public async Task<T?> LoadAsync<T>(string key)
     {
         if (!UsesDatabase) return default;

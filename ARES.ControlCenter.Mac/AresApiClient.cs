@@ -125,4 +125,8 @@ internal sealed class AresApiClient
     {
         using var request = Request(HttpMethod.Put, $"/api/admin/users/{id}"); request.Content = JsonContent.Create(new { role, enabled }); using var response = await http.SendAsync(request); response.EnsureSuccessStatusCode();
     }
+    public async Task RemoveAdminAsync(Guid id)
+    {
+        using var request = Request(HttpMethod.Delete, $"/api/admin/users/{id}"); using var response = await http.SendAsync(request); response.EnsureSuccessStatusCode();
+    }
 }

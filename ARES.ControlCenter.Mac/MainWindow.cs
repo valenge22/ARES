@@ -212,9 +212,11 @@ public sealed class MainWindow : Window
                 var role = new ComboBox { Width = 140, ItemsSource = new[] { "Administrator", "Supervisor", "Viewer" }, SelectedItem = item.Role, IsEnabled = item.Role != "Owner" };
                 var toggle = new Button { Content = item.Enabled ? "Suspender" : "Habilitar", IsEnabled = item.Role != "Owner" };
                 var save = new Button { Content = "Guardar rol", IsEnabled = item.Role != "Owner" };
+                var remove = new Button { Content = "Eliminar acceso", IsEnabled = item.Role != "Owner" };
                 toggle.Click += async (_, _) => { await api.UpdateAdminAsync(item.UserId, item.Role, !item.Enabled); await LoadAsync(); };
                 save.Click += async (_, _) => { await api.UpdateAdminAsync(item.UserId, role.SelectedItem?.ToString() ?? item.Role, item.Enabled); await LoadAsync(); };
-                list.Children.Add(new Border { Background = Brushes.White, Padding = new Thickness(12), Child = new StackPanel { Spacing = 6, Children = { new TextBlock { Text = $"{item.DisplayName} · {item.Email} · {(item.Enabled ? "Activo" : "Suspendido")}", FontWeight = FontWeight.Bold }, new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Children = { role, save, toggle } } } } });
+                remove.Click += async (_, _) => { await api.RemoveAdminAsync(item.UserId); await LoadAsync(); };
+                list.Children.Add(new Border { Background = Brushes.White, Padding = new Thickness(12), Child = new StackPanel { Spacing = 6, Children = { new TextBlock { Text = $"{item.DisplayName} · {item.Email} · {(item.Enabled ? "Activo" : "Suspendido")}", FontWeight = FontWeight.Bold }, new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Children = { role, save, toggle, remove } } } } });
             }
         }
         dialog.Content = new ScrollViewer { Content = list, Padding = new Thickness(18) }; await LoadAsync(); await dialog.ShowDialog(owner);

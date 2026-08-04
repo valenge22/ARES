@@ -617,9 +617,11 @@ namespace AdministracionEmpleados
                     var role = new ComboBox { Width = 140, DropDownStyle = ComboBoxStyle.DropDownList, Enabled = item.Role != "Owner" }; role.Items.AddRange(["Administrator", "Supervisor", "Viewer"]); role.SelectedItem = item.Role;
                     var toggle = new Button { Text = item.Enabled ? "Suspender" : "Habilitar", Width = 100, Enabled = item.Role != "Owner" };
                     var save = new Button { Text = "Guardar rol", Width = 100, Enabled = item.Role != "Owner" };
-                    var row = new FlowLayoutPanel { Width = 820, Height = 48, Controls = { new Label { Text = $"{item.DisplayName}\n{item.Email}", Width = 360, Height = 42 }, role, save, toggle } };
+                    var remove = new Button { Text = "Eliminar acceso", Width = 110, Enabled = item.Role != "Owner" };
+                    var row = new FlowLayoutPanel { Width = 850, Height = 48, Controls = { new Label { Text = $"{item.DisplayName}\n{item.Email}", Width = 330, Height = 42 }, role, save, toggle, remove } };
                     save.Click += async (_, _) => { await discoveryService.ActualizarUsuarioPanelAsync(item.UserId, role.Text, item.Enabled); await LoadAsync(); };
                     toggle.Click += async (_, _) => { await discoveryService.ActualizarUsuarioPanelAsync(item.UserId, item.Role, !item.Enabled); await LoadAsync(); };
+                    remove.Click += async (_, _) => { if (MessageBox.Show($"¿Eliminar el acceso de {item.DisplayName}?", "ARES", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) == DialogResult.Yes) { await discoveryService.EliminarUsuarioPanelAsync(item.UserId); await LoadAsync(); } };
                     users.Controls.Add(row);
                 }
                 usersPage.Controls.Add(users);

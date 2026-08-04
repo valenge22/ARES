@@ -31,7 +31,7 @@ $iscc = $isccCandidates | Select-Object -First 1
 if (-not $iscc) { throw 'No se encontró Inno Setup 6 (ISCC.exe).' }
 
 $iss = Join-Path $raiz 'AdministracionEmpleados\Installer\ARES-Control-Center.iss'
-& $iscc "/DAppSource=$app" "/DOutputDir=$(Join-Path $raiz 'distribucion')" '/DAppVersion=1.3.0' $iss
+& $iscc "/DAppSource=$app" "/DOutputDir=$(Join-Path $raiz 'distribucion')" '/DAppVersion=1.3.1' $iss
 if ($LASTEXITCODE -ne 0 -or -not (Test-Path $setup)) { throw 'No se pudo generar el instalador EXE.' }
 
 Write-Host "Instalador creado: $setup"

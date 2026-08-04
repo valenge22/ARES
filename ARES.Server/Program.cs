@@ -19,7 +19,6 @@ await persistence.EnsureOwnerAsync(
     builder.Configuration["ARES_OWNER_USER_ID"] ?? Environment.GetEnvironmentVariable("ARES_OWNER_USER_ID"),
     builder.Configuration["ARES_OWNER_NAME"] ?? Environment.GetEnvironmentVariable("ARES_OWNER_NAME"));
 var authService = new AresAuthService(builder.Configuration, persistence);
-string registrationCode = builder.Configuration["ARES_REGISTRATION_CODE"] ?? Environment.GetEnvironmentVariable("ARES_REGISTRATION_CODE") ?? "";
 
 string apiKey = builder.Configuration["ARES_API_KEY"]
     ?? Environment.GetEnvironmentVariable("ARES_API_KEY")
@@ -34,8 +33,8 @@ string updateVersionPath = Path.Combine(AppContext.BaseDirectory, "data", "agent
 string controlSessionsPath = Path.Combine(AppContext.BaseDirectory, "data", "control-sessions.json");
 string controlWindowsPackagePath = Path.Combine(AppContext.BaseDirectory, "data", "control-windows-update.zip");
 string controlMacPackagePath = Path.Combine(AppContext.BaseDirectory, "data", "control-macos-update.pkg");
-string latestWindowsControlVersion = "1.4.1";
-string latestMacControlVersion = "1.3.1";
+string latestWindowsControlVersion = "1.5.0";
+string latestMacControlVersion = "1.4.0";
 Directory.CreateDirectory(Path.GetDirectoryName(dataPath)!);
 
 var agents = new ConcurrentDictionary<string, AgentStatus>(StringComparer.OrdinalIgnoreCase);
@@ -117,15 +116,19 @@ app.MapGet("/api/auth/me", (HttpContext context) => Results.Ok((AuthenticatedAdm
 
 app.MapPost("/api/auth/register", async (RegisterRequest request, HttpRequest httpRequest, CancellationToken cancellationToken) =>
 {
-    if (registrationCode.Length < 8 || request.InvitationCode.Length != registrationCode.Length ||
-        !CryptographicOperations.FixedTimeEquals(Encoding.UTF8.GetBytes(request.InvitationCode), Encoding.UTF8.GetBytes(registrationCode)))
-        return Results.Json(new { error = "Código de invitación inválido." }, statusCode: 403);
-    string name = request.DisplayName.Trim(); string email = request.Email.Trim();
-    if (name.Length is < 2 or > 80 || !email.Contains('@') || request.Password.Length < 8)
+    string name = request.DisplayName?.Trim() ?? ""; string email = request.Email?.Trim() ?? ""; string password = request.Password ?? "";
+    if (name.Length is < 2 or > 80 || !email.Contains('@') || password.Length < 8)
         return Results.BadRequest(new { error = "Revisá el nombre, correo y contraseña (mínimo 8 caracteres)." });
+    Guid? invitationId = await persistence.ConsumeInvitationAsync(HashInvitationCode(request.InvitationCode));
+    if (!invitationId.HasValue)
+        return Results.Json(new { error = "Código de invitación inválido." }, statusCode: 403);
     string origin = $"{httpRequest.Scheme}://{httpRequest.Host}";
-    Guid? userId = await authService.SignUpAsync(email, request.Password, name, $"{origin}/auth/confirmed", cancellationToken);
-    if (!userId.HasValue) return Results.BadRequest(new { error = "No se pudo crear la cuenta. Es posible que el correo ya exista." });
+    Guid? userId = await authService.SignUpAsync(email, password, name, $"{origin}/auth/confirmed", cancellationToken);
+    if (!userId.HasValue)
+    {
+        await persistence.RestoreInvitationUseAsync(invitationId.Value);
+        return Results.BadRequest(new { error = "No se pudo crear la cuenta. Es posible que el correo ya exista." });
+    }
     await persistence.RegisterPendingAsync(userId.Value, email, name);
     return Results.Ok(new { created = true, pendingApproval = true, message = "Revisá tu correo y esperá la aprobación del propietario." });
 });
@@ -180,6 +183,23 @@ app.MapDelete("/api/admin/users/{id:guid}", async (Guid id, HttpContext context)
 {
     if (!IsOwner(context)) return Results.Forbid();
     return await persistence.RemoveAdminAsync(id) ? Results.Ok(new { removed = true }) : Results.NotFound();
+});
+app.MapGet("/api/admin/invitations", async (HttpContext context) =>
+    IsOwner(context) ? Results.Ok(await persistence.GetInvitationsAsync()) : Results.Forbid());
+app.MapPost("/api/admin/invitations", async (CreateInvitationRequest request, HttpContext context) =>
+{
+    if (!IsOwner(context)) return Results.Forbid();
+    if (request.MaxUses is < 1 or > 1000 || request.DurationHours is < 1 or > 720)
+        return Results.BadRequest(new { error = "Los usos deben ser 1-1000 y la duración 1-720 horas." });
+    string raw = RandomNumberGenerator.GetHexString(12);
+    string code = $"ARES-{raw[..4]}-{raw[4..8]}-{raw[8..]}";
+    InvitationInfo info = await persistence.CreateInvitationAsync(HashInvitationCode(code), code[..9], request.MaxUses,
+        DateTimeOffset.UtcNow.AddHours(request.DurationHours), CurrentAdmin(context).UserId);
+    return Results.Ok(new { code, invitation = info });
+});
+app.MapDelete("/api/admin/invitations/{id:guid}", async (Guid id, HttpContext context) =>
+{
+    if (!IsOwner(context)) return Results.Forbid(); await persistence.RevokeInvitationAsync(id); return Results.Ok(new { revoked = true });
 });
 
 app.MapPost("/api/control-sessions/heartbeat", async (ControlSessionHeartbeat heartbeat, HttpRequest httpRequest) =>
@@ -714,6 +734,7 @@ DateTimeOffset? CalcularProximoCambio(string agentId)
 AuthenticatedAdmin CurrentAdmin(HttpContext context) => (AuthenticatedAdmin)context.Items["AresAdmin"]!;
 bool IsOwner(HttpContext context) => context.Items["AresAdmin"] is AuthenticatedAdmin admin && admin.Role == "Owner";
 bool ValidRole(string role) => role is "Owner" or "Administrator" or "Supervisor" or "Viewer";
+byte[] HashInvitationCode(string? code) => SHA256.HashData(Encoding.UTF8.GetBytes((code ?? "").Trim().ToUpperInvariant()));
 bool CanAccess(string role, string method, PathString path)
 {
     if (role is "Owner" or "Administrator") return true;

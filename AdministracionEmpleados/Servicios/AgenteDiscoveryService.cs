@@ -226,4 +226,17 @@ public sealed class AgenteDiscoveryService
     {
         using HttpClient client = CrearCliente(); using HttpResponseMessage response = await client.DeleteAsync($"{AresSettings.Cargar().ServerUrl.TrimEnd('/')}/api/admin/users/{id}", cancelacion); response.EnsureSuccessStatusCode();
     }
+    public async Task<List<InvitationInfo>> ObtenerInvitacionesAsync(CancellationToken cancelacion = default)
+    {
+        using HttpClient client = CrearCliente(); return await client.GetFromJsonAsync<List<InvitationInfo>>($"{AresSettings.Cargar().ServerUrl.TrimEnd('/')}/api/admin/invitations", cancelacion) ?? [];
+    }
+    public async Task<CreatedInvitation> CrearInvitacionAsync(int maxUses, int durationHours, CancellationToken cancelacion = default)
+    {
+        using HttpClient client = CrearCliente(); using HttpResponseMessage response = await client.PostAsJsonAsync($"{AresSettings.Cargar().ServerUrl.TrimEnd('/')}/api/admin/invitations", new { maxUses, durationHours }, cancelacion); response.EnsureSuccessStatusCode();
+        return await response.Content.ReadFromJsonAsync<CreatedInvitation>(cancelacion) ?? throw new InvalidDataException("Respuesta de invitación inválida.");
+    }
+    public async Task RevocarInvitacionAsync(Guid id, CancellationToken cancelacion = default)
+    {
+        using HttpClient client = CrearCliente(); using HttpResponseMessage response = await client.DeleteAsync($"{AresSettings.Cargar().ServerUrl.TrimEnd('/')}/api/admin/invitations/{id}", cancelacion); response.EnsureSuccessStatusCode();
+    }
 }

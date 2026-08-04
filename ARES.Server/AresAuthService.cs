@@ -115,3 +115,4 @@ internal sealed record RecoverRequest(string Email);
 internal sealed record UpdatePasswordRequest(string AccessToken, string Password);
 internal sealed record ApproveRegistrationRequest(string Role);
 internal sealed record UpdateAdminRequest(string Role, bool Enabled);
+internal sealed record CreateInvitationRequest(int MaxUses, int DurationHours);

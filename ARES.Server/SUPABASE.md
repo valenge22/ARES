@@ -31,11 +31,12 @@ Para habilitar el inicio de sesión de los paneles, agregar también:
 - `SUPABASE_URL`: URL pública del proyecto, por ejemplo `https://proyecto.supabase.co`.
 - `SUPABASE_ANON_KEY`: clave pública `anon`/publishable del proyecto. Nunca usar
   la clave `service_role` en un panel ni publicarla en GitHub.
-- `ARES_REGISTRATION_CODE`: código de invitación de al menos 8 caracteres que
-  deberán ingresar quienes creen su propia cuenta. Guardarlo solo en Render.
+Los códigos de invitación se generan desde **Administrar usuarios**. Cada código
+tiene cantidad máxima de usos, vencimiento y revocación; se guarda únicamente su
+hash. No se necesita una variable de Render por código.
 
-El autorregistro crea una solicitud `Pending`; solamente un usuario `Owner`
-puede aprobarla y asignar `Administrator`, `Supervisor` o `Viewer`.
+El autorregistro crea una solicitud `Pending`; solamente un usuario `Owner` puede
+aprobarla y asignar `Administrator`, `Supervisor` o `Viewer`.
 
 Para enviar confirmaciones y recuperaciones con identidad propia, configurar un
 SMTP en **Supabase > Authentication > Email > SMTP Settings** antes de producción.

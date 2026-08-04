@@ -80,13 +80,28 @@ internal sealed class AresPersistence
                 constraint ck_ares_registration_status check (status in ('Pending', 'Approved', 'Rejected'))
             );
 
+            create table if not exists ares_invitation_codes (
+                invitation_id uuid primary key,
+                code_hash bytea not null unique,
+                code_prefix varchar(14) not null,
+                max_uses integer not null,
+                used_count integer not null default 0,
+                expires_at timestamptz not null,
+                revoked boolean not null default false,
+                created_by uuid not null,
+                created_at timestamptz not null default now(),
+                constraint ck_ares_invitation_uses check (max_uses between 1 and 1000 and used_count >= 0)
+            );
+
             alter table ares_state enable row level security;
             alter table ares_admin_users enable row level security;
             alter table ares_registration_requests enable row level security;
+            alter table ares_invitation_codes enable row level security;
 
             revoke all on table ares_state from anon, authenticated;
             revoke all on table ares_admin_users from anon, authenticated;
             revoke all on table ares_registration_requests from anon, authenticated;
+            revoke all on table ares_invitation_codes from anon, authenticated;
             """;
         await command.ExecuteNonQueryAsync();
     }
@@ -210,6 +225,53 @@ internal sealed class AresPersistence
         command.Parameters.AddWithValue("id", userId); return await command.ExecuteNonQueryAsync() > 0;
     }
 
+    public async Task<InvitationInfo> CreateInvitationAsync(byte[] codeHash, string prefix, int maxUses, DateTimeOffset expiresAt, Guid createdBy)
+    {
+        Guid id = Guid.NewGuid();
+        await using var connection = new NpgsqlConnection(connectionString); await connection.OpenAsync();
+        await using var command = connection.CreateCommand(); command.CommandText = """
+            insert into ares_invitation_codes(invitation_id,code_hash,code_prefix,max_uses,expires_at,created_by)
+            values(@id,@hash,@prefix,@max,@expires,@creator)
+            """;
+        command.Parameters.AddWithValue("id", id); command.Parameters.AddWithValue("hash", codeHash); command.Parameters.AddWithValue("prefix", prefix);
+        command.Parameters.AddWithValue("max", maxUses); command.Parameters.AddWithValue("expires", expiresAt); command.Parameters.AddWithValue("creator", createdBy);
+        await command.ExecuteNonQueryAsync(); return new(id, prefix, maxUses, 0, expiresAt, false, DateTimeOffset.UtcNow);
+    }
+
+    public async Task<List<InvitationInfo>> GetInvitationsAsync()
+    {
+        var result = new List<InvitationInfo>(); await using var connection = new NpgsqlConnection(connectionString); await connection.OpenAsync();
+        await using var command = connection.CreateCommand(); command.CommandText = "select invitation_id,code_prefix,max_uses,used_count,expires_at,revoked,created_at from ares_invitation_codes order by created_at desc limit 200";
+        await using var reader = await command.ExecuteReaderAsync();
+        while (await reader.ReadAsync()) result.Add(new(reader.GetGuid(0), reader.GetString(1), reader.GetInt32(2), reader.GetInt32(3), reader.GetFieldValue<DateTimeOffset>(4), reader.GetBoolean(5), reader.GetFieldValue<DateTimeOffset>(6)));
+        return result;
+    }
+
+    public async Task<Guid?> ConsumeInvitationAsync(byte[] codeHash)
+    {
+        await using var connection = new NpgsqlConnection(connectionString); await connection.OpenAsync();
+        await using var command = connection.CreateCommand(); command.CommandText = """
+            update ares_invitation_codes set used_count=used_count+1
+            where code_hash=@hash and not revoked and expires_at > now() and used_count < max_uses
+            returning invitation_id
+            """;
+        command.Parameters.AddWithValue("hash", codeHash); object? value = await command.ExecuteScalarAsync(); return value is Guid id ? id : null;
+    }
+
+    public async Task RestoreInvitationUseAsync(Guid invitationId)
+    {
+        await using var connection = new NpgsqlConnection(connectionString); await connection.OpenAsync();
+        await using var command = connection.CreateCommand(); command.CommandText = "update ares_invitation_codes set used_count=greatest(used_count-1,0) where invitation_id=@id";
+        command.Parameters.AddWithValue("id", invitationId); await command.ExecuteNonQueryAsync();
+    }
+
+    public async Task RevokeInvitationAsync(Guid invitationId)
+    {
+        await using var connection = new NpgsqlConnection(connectionString); await connection.OpenAsync();
+        await using var command = connection.CreateCommand(); command.CommandText = "update ares_invitation_codes set revoked=true where invitation_id=@id";
+        command.Parameters.AddWithValue("id", invitationId); await command.ExecuteNonQueryAsync();
+    }
+
     public async Task<T?> LoadAsync<T>(string key)
     {
         if (!UsesDatabase) return default;
@@ -245,3 +307,4 @@ internal sealed class AresPersistence
 
 internal sealed record AdminUser(Guid UserId, string Email, string DisplayName, string Role, bool Enabled);
 internal sealed record RegistrationRequestInfo(Guid UserId, string Email, string DisplayName, string Status, DateTimeOffset RequestedAt, DateTimeOffset? ReviewedAt);
+internal sealed record InvitationInfo(Guid InvitationId, string CodePrefix, int MaxUses, int UsedCount, DateTimeOffset ExpiresAt, bool Revoked, DateTimeOffset CreatedAt);

@@ -1,6 +1,8 @@
 using ARES.Shared.Modelos;
+using ARES.Shared.Servicios;
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Input.Platform;
 using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Threading;
@@ -199,6 +201,23 @@ public sealed class MainWindow : Window
         async Task LoadAsync()
         {
             list.Children.Clear();
+            var createInvitation = new Button { Content = "Crear código de invitación", Background = Brush.Parse("#2563EB"), Foreground = Brushes.White };
+            createInvitation.Click += async (_, _) =>
+            {
+                var uses = new NumericUpDown { Minimum = 1, Maximum = 1000, Value = 1 }; var hours = new NumericUpDown { Minimum = 1, Maximum = 720, Value = 48 };
+                var create = new Button { Content = "Generar código" }; var message = new TextBlock { TextWrapping = TextWrapping.Wrap };
+                var form = new Window { Title = "Nueva invitación", Width = 430, Height = 330, WindowStartupLocation = WindowStartupLocation.CenterOwner,
+                    Content = new StackPanel { Margin = new Thickness(26), Spacing = 10, Children = { new TextBlock { Text = "Cantidad máxima de usos" }, uses, new TextBlock { Text = "Duración en horas" }, hours, create, message } } };
+                create.Click += async (_, _) => { CreatedInvitation result = await api.CreateInvitationAsync((int)(uses.Value ?? 1), (int)(hours.Value ?? 48)); if (TopLevel.GetTopLevel(this)?.Clipboard is { } clipboard) await clipboard.SetTextAsync(result.Code); message.Text = $"{result.Code}\nCopiado al portapapeles. Se mostrará completo solamente esta vez."; await LoadAsync(); };
+                await form.ShowDialog(dialog);
+            };
+            list.Children.Add(createInvitation);
+            foreach (var invite in await api.InvitationsAsync())
+            {
+                bool active = !invite.Revoked && invite.ExpiresAt > DateTimeOffset.UtcNow && invite.UsedCount < invite.MaxUses;
+                var revoke = new Button { Content = "Revocar", IsEnabled = active }; revoke.Click += async (_, _) => { await api.RevokeInvitationAsync(invite.InvitationId); await LoadAsync(); };
+                list.Children.Add(new Border { Background = Brushes.White, Padding = new Thickness(12), Child = new StackPanel { Spacing = 5, Children = { new TextBlock { Text = $"{invite.CodePrefix}-••••-•••• · {invite.UsedCount}/{invite.MaxUses} usos", FontWeight = FontWeight.Bold }, new TextBlock { Text = $"Vence {invite.ExpiresAt.ToLocalTime():dd/MM/yyyy HH:mm} · {(active ? "Activo" : "Inactivo")}" }, revoke } } });
+            }
             foreach (var item in (await api.RegistrationsAsync()).Where(x => x.Status == "Pending"))
             {
                 var role = new ComboBox { Width = 140, ItemsSource = new[] { "Administrator", "Supervisor", "Viewer" }, SelectedIndex = 1 };

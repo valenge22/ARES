@@ -149,3 +149,20 @@ public sealed class AdminUserInfo
     public string Role { get; set; } = "";
     public bool Enabled { get; set; }
 }
+
+public sealed class InvitationInfo
+{
+    public Guid InvitationId { get; set; }
+    public string CodePrefix { get; set; } = "";
+    public int MaxUses { get; set; }
+    public int UsedCount { get; set; }
+    public DateTimeOffset ExpiresAt { get; set; }
+    public bool Revoked { get; set; }
+    public DateTimeOffset CreatedAt { get; set; }
+}
+
+public sealed class CreatedInvitation
+{
+    public string Code { get; set; } = "";
+    public InvitationInfo Invitation { get; set; } = new();
+}

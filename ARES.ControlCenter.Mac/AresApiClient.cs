@@ -129,4 +129,16 @@ internal sealed class AresApiClient
     {
         using var request = Request(HttpMethod.Delete, $"/api/admin/users/{id}"); using var response = await http.SendAsync(request); response.EnsureSuccessStatusCode();
     }
+    public async Task<List<InvitationInfo>> InvitationsAsync()
+    {
+        using var request = Request(HttpMethod.Get, "/api/admin/invitations"); using var response = await http.SendAsync(request); response.EnsureSuccessStatusCode(); return await response.Content.ReadFromJsonAsync<List<InvitationInfo>>() ?? [];
+    }
+    public async Task<CreatedInvitation> CreateInvitationAsync(int maxUses, int durationHours)
+    {
+        using var request = Request(HttpMethod.Post, "/api/admin/invitations"); request.Content = JsonContent.Create(new { maxUses, durationHours }); using var response = await http.SendAsync(request); response.EnsureSuccessStatusCode(); return await response.Content.ReadFromJsonAsync<CreatedInvitation>() ?? throw new InvalidDataException("Respuesta inválida.");
+    }
+    public async Task RevokeInvitationAsync(Guid id)
+    {
+        using var request = Request(HttpMethod.Delete, $"/api/admin/invitations/{id}"); using var response = await http.SendAsync(request); response.EnsureSuccessStatusCode();
+    }
 }

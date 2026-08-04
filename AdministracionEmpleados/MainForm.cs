@@ -1,5 +1,6 @@
 using AdministracionEmpleados.Servicios;
 using ARES.Shared.Modelos;
+using ARES.Shared.Servicios;
 
 namespace AdministracionEmpleados
 {
@@ -592,12 +593,12 @@ namespace AdministracionEmpleados
         {
             using var dialog = new Form { Text = "Usuarios del panel ARES", Width = 900, Height = 620, StartPosition = FormStartPosition.CenterParent };
             var tabs = new TabControl { Dock = DockStyle.Fill };
-            var pendingPage = new TabPage("Solicitudes pendientes"); var usersPage = new TabPage("Usuarios autorizados");
-            tabs.TabPages.Add(pendingPage); tabs.TabPages.Add(usersPage); dialog.Controls.Add(tabs);
+            var pendingPage = new TabPage("Solicitudes pendientes"); var usersPage = new TabPage("Usuarios autorizados"); var invitationsPage = new TabPage("Códigos de invitación");
+            tabs.TabPages.Add(pendingPage); tabs.TabPages.Add(usersPage); tabs.TabPages.Add(invitationsPage); dialog.Controls.Add(tabs);
 
             async Task LoadAsync()
             {
-                pendingPage.Controls.Clear(); usersPage.Controls.Clear();
+                pendingPage.Controls.Clear(); usersPage.Controls.Clear(); invitationsPage.Controls.Clear();
                 List<ARES.Shared.Servicios.RegistrationRequestInfo> requests = await discoveryService.ObtenerSolicitudesRegistroAsync();
                 var pending = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.TopDown, WrapContents = false, AutoScroll = true, Padding = new Padding(15) };
                 foreach (var item in requests.Where(x => x.Status == "Pending"))
@@ -625,6 +626,27 @@ namespace AdministracionEmpleados
                     users.Controls.Add(row);
                 }
                 usersPage.Controls.Add(users);
+
+                var inviteRoot = new Panel { Dock = DockStyle.Fill }; var inviteList = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.TopDown, WrapContents = false, AutoScroll = true, Padding = new Padding(15, 70, 15, 15) };
+                var createInvite = new Button { Text = "Crear código", Width = 130, Height = 38, Location = new Point(18, 16), BackColor = Color.FromArgb(37, 99, 235), ForeColor = Color.White, FlatStyle = FlatStyle.Flat };
+                createInvite.Click += async (_, _) =>
+                {
+                    using var form = new Form { Text = "Nueva invitación", Width = 420, Height = 280, StartPosition = FormStartPosition.CenterParent, FormBorderStyle = FormBorderStyle.FixedDialog };
+                    var uses = new NumericUpDown { Minimum = 1, Maximum = 1000, Value = 1, Width = 160 }; var hours = new NumericUpDown { Minimum = 1, Maximum = 720, Value = 48, Width = 160 };
+                    var create = new Button { Text = "Generar código", Width = 160, Height = 38 };
+                    var layout = new FlowLayoutPanel { Location = new Point(30, 25), Width = 340, Height = 210, FlowDirection = FlowDirection.TopDown, WrapContents = false, Controls = { new Label { Text = "Cantidad máxima de usos", AutoSize = true }, uses, new Label { Text = "Duración en horas", AutoSize = true }, hours, create } };
+                    form.Controls.Add(layout);
+                    create.Click += async (_, _) => { CreatedInvitation result = await discoveryService.CrearInvitacionAsync((int)uses.Value, (int)hours.Value); Clipboard.SetText(result.Code); MessageBox.Show($"Código creado y copiado:\n\n{result.Code}\n\nSe mostrará completo solamente esta vez.", "ARES", MessageBoxButtons.OK, MessageBoxIcon.Information); form.Close(); await LoadAsync(); };
+                    form.ShowDialog(dialog);
+                };
+                foreach (var invite in await discoveryService.ObtenerInvitacionesAsync())
+                {
+                    bool active = !invite.Revoked && invite.ExpiresAt > DateTimeOffset.UtcNow && invite.UsedCount < invite.MaxUses;
+                    var revoke = new Button { Text = "Revocar", Width = 90, Enabled = active };
+                    revoke.Click += async (_, _) => { await discoveryService.RevocarInvitacionAsync(invite.InvitationId); await LoadAsync(); };
+                    inviteList.Controls.Add(new FlowLayoutPanel { Width = 820, Height = 45, Controls = { new Label { Text = $"{invite.CodePrefix}-••••-•••• · {invite.UsedCount}/{invite.MaxUses} usos · vence {invite.ExpiresAt.ToLocalTime():dd/MM/yyyy HH:mm} · {(active ? "Activo" : "Inactivo")}", Width = 680, Height = 35 }, revoke } });
+                }
+                inviteRoot.Controls.Add(inviteList); inviteRoot.Controls.Add(createInvite); invitationsPage.Controls.Add(inviteRoot);
             }
             try { await LoadAsync(); dialog.ShowDialog(this); }
             catch (Exception ex) { MessageBox.Show(ex.Message, "ARES", MessageBoxButtons.OK, MessageBoxIcon.Error); }

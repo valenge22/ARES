@@ -85,7 +85,7 @@ internal sealed class SetupForm : Form
 
         Controls.Add(body); Controls.Add(progress); Controls.Add(header);
         install.Click += async (_, _) => await InstallAsync();
-        FormClosing += (_, e) => { if (busy) e.Cancel = true; };
+        FormClosing += (_, e) => { if (busy && !Installed) e.Cancel = true; };
     }
 
     private async Task InstallAsync()
@@ -129,6 +129,7 @@ internal sealed class SetupForm : Form
             }
             MessageBox.Show("ARES Agent se instaló correctamente. Cerrá la sesión administradora e ingresá con la nueva cuenta del empleado.", "ARES", MessageBoxButtons.OK, MessageBoxIcon.Information);
             Installed = true;
+            SetBusy(false, "Instalación completada correctamente.");
             DialogResult = DialogResult.OK;
             Close();
         }

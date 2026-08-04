@@ -8,7 +8,7 @@
   #define SetupUiSource "..\..\distribucion\ARES-Agent-Setup-UI"
 #endif
 #ifndef AppVersion
-  #define AppVersion "1.6.4"
+  #define AppVersion "1.6.5"
 #endif
 
 [Setup]

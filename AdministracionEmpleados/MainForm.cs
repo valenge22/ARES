@@ -627,8 +627,10 @@ namespace AdministracionEmpleados
                 }
                 usersPage.Controls.Add(users);
 
-                var inviteRoot = new Panel { Dock = DockStyle.Fill }; var inviteList = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.TopDown, WrapContents = false, AutoScroll = true, Padding = new Padding(15, 70, 15, 15) };
-                var createInvite = new Button { Text = "Crear código", Width = 130, Height = 38, Location = new Point(18, 16), BackColor = Color.FromArgb(37, 99, 235), ForeColor = Color.White, FlatStyle = FlatStyle.Flat };
+                var inviteRoot = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 2, ColumnCount = 1, Padding = new Padding(15) };
+                inviteRoot.RowStyles.Add(new RowStyle(SizeType.Absolute, 55)); inviteRoot.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+                var inviteList = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.TopDown, WrapContents = false, AutoScroll = true, Padding = new Padding(0, 8, 0, 0) };
+                var createInvite = new Button { Text = "Crear código", Width = 130, Height = 38, Anchor = AnchorStyles.Left, BackColor = Color.FromArgb(37, 99, 235), ForeColor = Color.White, FlatStyle = FlatStyle.Flat };
                 createInvite.Click += async (_, _) =>
                 {
                     using var form = new Form { Text = "Nueva invitación", Width = 420, Height = 280, StartPosition = FormStartPosition.CenterParent, FormBorderStyle = FormBorderStyle.FixedDialog };
@@ -646,7 +648,7 @@ namespace AdministracionEmpleados
                     revoke.Click += async (_, _) => { await discoveryService.RevocarInvitacionAsync(invite.InvitationId); await LoadAsync(); };
                     inviteList.Controls.Add(new FlowLayoutPanel { Width = 820, Height = 45, Controls = { new Label { Text = $"{invite.CodePrefix}-••••-•••• · {invite.UsedCount}/{invite.MaxUses} usos · vence {invite.ExpiresAt.ToLocalTime():dd/MM/yyyy HH:mm} · {(active ? "Activo" : "Inactivo")}", Width = 680, Height = 35 }, revoke } });
                 }
-                inviteRoot.Controls.Add(inviteList); inviteRoot.Controls.Add(createInvite); invitationsPage.Controls.Add(inviteRoot);
+                inviteRoot.Controls.Add(createInvite, 0, 0); inviteRoot.Controls.Add(inviteList, 0, 1); invitationsPage.Controls.Add(inviteRoot);
             }
             try { await LoadAsync(); dialog.ShowDialog(this); }
             catch (Exception ex) { MessageBox.Show(ex.Message, "ARES", MessageBoxButtons.OK, MessageBoxIcon.Error); }

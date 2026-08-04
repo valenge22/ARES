@@ -33,7 +33,7 @@ string updateVersionPath = Path.Combine(AppContext.BaseDirectory, "data", "agent
 string controlSessionsPath = Path.Combine(AppContext.BaseDirectory, "data", "control-sessions.json");
 string controlWindowsPackagePath = Path.Combine(AppContext.BaseDirectory, "data", "control-windows-update.zip");
 string controlMacPackagePath = Path.Combine(AppContext.BaseDirectory, "data", "control-macos-update.pkg");
-string latestWindowsControlVersion = "1.5.0";
+string latestWindowsControlVersion = "1.5.1";
 string latestMacControlVersion = "1.4.0";
 Directory.CreateDirectory(Path.GetDirectoryName(dataPath)!);
 

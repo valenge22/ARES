@@ -325,11 +325,8 @@ namespace AdministracionEmpleados
                     if (MessageBox.Show($"Actualizar {empleado.Computadora.Nombre} a ARES Agent {empleado.Computadora.UltimaVersion}?", "ARES", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
                     try
                     {
-                        using var file = new OpenFileDialog { Filter = "Paquete ARES Agent (*.zip)|*.zip", Title = "Selecciona el instalador ZIP de la version nueva" };
-                        if (file.ShowDialog(this) != DialogResult.OK) return;
-                        await discoveryService.CargarPaqueteActualizacionAsync(file.FileName, empleado.Computadora.UltimaVersion);
                         await discoveryService.SolicitarActualizacionAsync(empleado.Computadora.AgentId);
-                        MessageBox.Show("Paquete cargado. La actualizacion comenzara en el proximo heartbeat.", "ARES");
+                        MessageBox.Show("Orden enviada. La actualización comenzará en el próximo heartbeat.", "ARES");
                     }
                     catch (Exception ex) { MessageBox.Show(ex.Message, "ARES", MessageBoxButtons.OK, MessageBoxIcon.Error); }
                 }

@@ -8,7 +8,7 @@ namespace ARES.ControlCenter.Mac;
 internal sealed class AresApiClient
 {
     private static readonly string sessionId = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes($"{Environment.MachineName}|{Environment.UserName}|ARES.ControlCenter.Mac")))[..24];
-    private readonly HttpClient http = new() { Timeout = TimeSpan.FromMinutes(5) };
+    private readonly HttpClient http = MacControlAuth.Client.CreateHttpClient(TimeSpan.FromMinutes(5));
     private MacSettings settings;
     public AresApiClient(MacSettings settings) => this.settings = settings;
     public void Update(MacSettings value) => settings = value;
@@ -16,7 +16,6 @@ internal sealed class AresApiClient
     private HttpRequestMessage Request(HttpMethod method, string path)
     {
         var request = new HttpRequestMessage(method, $"{settings.ServerUrl.TrimEnd('/')}{path}");
-        request.Headers.Add("X-ARES-Key", settings.ApiKey);
         return request;
     }
     public async Task<List<AgentStatus>> AgentsAsync()
@@ -80,7 +79,7 @@ internal sealed class AresApiClient
             EstadoActualizacion = MacControlUpdater.Status });
         using var response = await http.SendAsync(request); response.EnsureSuccessStatusCode();
         ControlSessionHeartbeatResponse policy = await response.Content.ReadFromJsonAsync<ControlSessionHeartbeatResponse>() ?? new();
-        if (policy.ActualizarAhora) _ = MacControlUpdater.StartAsync(policy.Url, settings.ApiKey);
+        if (policy.ActualizarAhora) _ = MacControlUpdater.StartAsync(policy.Url);
         return policy;
     }
     public async Task<List<ControlSessionStatus>> ControlSessionsAsync()

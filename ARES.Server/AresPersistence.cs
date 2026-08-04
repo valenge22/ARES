@@ -99,6 +99,20 @@ internal sealed class AresPersistence
         await command.ExecuteNonQueryAsync();
     }
 
+    public async Task<AdminUser?> GetAdminAsync(Guid userId)
+    {
+        if (!UsesDatabase) return null;
+        await using var connection = new NpgsqlConnection(connectionString);
+        await connection.OpenAsync();
+        await using var command = connection.CreateCommand();
+        command.CommandText = "select user_id, display_name, role, enabled from ares_admin_users where user_id = @userId";
+        command.Parameters.AddWithValue("userId", userId);
+        await using var reader = await command.ExecuteReaderAsync();
+        return await reader.ReadAsync()
+            ? new AdminUser(reader.GetGuid(0), reader.GetString(1), reader.GetString(2), reader.GetBoolean(3))
+            : null;
+    }
+
     public async Task<T?> LoadAsync<T>(string key)
     {
         if (!UsesDatabase) return default;
@@ -131,3 +145,5 @@ internal sealed class AresPersistence
         await command.ExecuteNonQueryAsync();
     }
 }
+
+internal sealed record AdminUser(Guid UserId, string DisplayName, string Role, bool Enabled);

@@ -181,11 +181,13 @@ public sealed class MainWindow : Window
     private async Task ShowSettingsAsync()
     {
         var url = new TextBox { Text = settings.ServerUrl, PlaceholderText = "Servidor HTTPS" };
-        var key = new TextBox { Text = settings.ApiKey, PasswordChar = '●', PlaceholderText = "Clave ARES" };
         var save = new Button { Content = "Guardar", HorizontalAlignment = HorizontalAlignment.Right, Padding = new Thickness(18, 9) };
+        var logout = new Button { Content = "Cerrar sesión", HorizontalAlignment = HorizontalAlignment.Right, Padding = new Thickness(18, 9) };
         var dialog = new Window { Title = "Configuración de ARES", Width = 520, Height = 280, WindowStartupLocation = WindowStartupLocation.CenterOwner };
-        dialog.Content = new StackPanel { Margin = new Thickness(24), Spacing = 12, Children = { new TextBlock { Text = "Dirección del servidor" }, url, new TextBlock { Text = "Clave ARES" }, key, save } };
-        save.Click += (_, _) => { settings.ServerUrl = url.Text?.Trim() ?? ""; settings.ApiKey = key.Text ?? ""; settings.Save(); api.Update(settings); dialog.Close(); };
+        string account = MacControlAuth.Client.User is null ? "" : $"{MacControlAuth.Client.User.DisplayName} · {MacControlAuth.Client.User.Email} · {MacControlAuth.Client.User.Role}";
+        dialog.Content = new StackPanel { Margin = new Thickness(24), Spacing = 12, Children = { new TextBlock { Text = $"Sesión: {account}" }, new TextBlock { Text = "Dirección del servidor" }, url, new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Spacing = 8, Children = { logout, save } } } };
+        save.Click += (_, _) => { settings.ServerUrl = url.Text?.Trim() ?? ""; settings.Save(); api.Update(settings); dialog.Close(); };
+        logout.Click += (_, _) => { MacControlAuth.Client.Logout(); if (Application.Current?.ApplicationLifetime is Avalonia.Controls.ApplicationLifetimes.IClassicDesktopStyleApplicationLifetime desktop) desktop.Shutdown(); };
         await dialog.ShowDialog(this); await ShowAgentsAsync();
     }
 

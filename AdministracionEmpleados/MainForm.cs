@@ -551,9 +551,9 @@ namespace AdministracionEmpleados
             AresSettings configuracion = AresSettings.Cargar();
             var contenido = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.TopDown, Padding = new Padding(28, 22, 28, 28), WrapContents = false };
             TextBox txtServidor = CrearCampoConfiguracion("URL HTTPS del servidor", configuracion.ServerUrl, contenido);
-            TextBox txtClave = CrearCampoConfiguracion("Clave compartida ARES", configuracion.ApiKey, contenido);
-            txtClave.UseSystemPasswordChar = true;
-            var estado = new Label { AutoSize = true, ForeColor = Color.FromArgb(100, 116, 139), Margin = new Padding(0, 14, 0, 0), Text = "La clave se guarda solamente en esta computadora." };
+            string usuario = AresControlAuth.Client.User is null ? "" : $"{AresControlAuth.Client.User.DisplayName} · {AresControlAuth.Client.User.Email} · {AresControlAuth.Client.User.Role}";
+            contenido.Controls.Add(new Label { AutoSize = true, ForeColor = Color.FromArgb(51, 65, 85), Margin = new Padding(0, 14, 0, 0), Text = $"Sesión: {usuario}" });
+            var estado = new Label { AutoSize = true, ForeColor = Color.FromArgb(100, 116, 139), Margin = new Padding(0, 14, 0, 0), Text = "La sesión está protegida para este usuario de Windows." };
             var guardar = new Button { Text = "Guardar y probar conexión", Width = 220, Height = 40, Margin = new Padding(0, 20, 0, 0), FlatStyle = FlatStyle.Flat, BackColor = Color.FromArgb(37, 99, 235), ForeColor = Color.White, Cursor = Cursors.Hand };
             guardar.FlatAppearance.BorderSize = 0;
             guardar.Click += async (_, _) =>
@@ -564,14 +564,7 @@ namespace AdministracionEmpleados
                     estado.Text = "Ingresá una dirección HTTPS válida.";
                     return;
                 }
-                if (string.IsNullOrWhiteSpace(txtClave.Text) || txtClave.Text == "CAMBIAR-ESTA-CLAVE")
-                {
-                    estado.ForeColor = Color.FromArgb(220, 38, 38);
-                    estado.Text = "Ingresá la misma clave configurada como ARES_API_KEY en Render.";
-                    return;
-                }
-
-                new AresSettings { ServerUrl = txtServidor.Text.TrimEnd('/'), ApiKey = txtClave.Text }.GuardarLocal();
+                new AresSettings { ServerUrl = txtServidor.Text.TrimEnd('/'), ApiKey = configuracion.ApiKey }.GuardarLocal();
                 guardar.Enabled = false;
                 estado.ForeColor = Color.FromArgb(37, 99, 235);
                 estado.Text = "Probando conexión…";
@@ -581,6 +574,9 @@ namespace AdministracionEmpleados
                 estado.Text = lblConexion.Text.StartsWith("Error") ? lblConexion.Text : "Configuración guardada. Conexión correcta.";
             };
             contenido.Controls.Add(guardar);
+            var cerrarSesion = new Button { Text = "Cerrar sesión", Width = 150, Height = 38, Margin = new Padding(0, 12, 0, 0), FlatStyle = FlatStyle.Flat };
+            cerrarSesion.Click += (_, _) => { AresControlAuth.Client.Logout(); Application.Restart(); Environment.Exit(0); };
+            contenido.Controls.Add(cerrarSesion);
             contenido.Controls.Add(estado);
             tarjeta.Controls.Add(contenido);
             tarjeta.Controls.Add(titulo);

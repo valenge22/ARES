@@ -18,6 +18,7 @@ await persistence.InitializeAsync();
 await persistence.EnsureOwnerAsync(
     builder.Configuration["ARES_OWNER_USER_ID"] ?? Environment.GetEnvironmentVariable("ARES_OWNER_USER_ID"),
     builder.Configuration["ARES_OWNER_NAME"] ?? Environment.GetEnvironmentVariable("ARES_OWNER_NAME"));
+var authService = new AresAuthService(builder.Configuration, persistence);
 
 string apiKey = builder.Configuration["ARES_API_KEY"]
     ?? Environment.GetEnvironmentVariable("ARES_API_KEY")
@@ -32,8 +33,8 @@ string updateVersionPath = Path.Combine(AppContext.BaseDirectory, "data", "agent
 string controlSessionsPath = Path.Combine(AppContext.BaseDirectory, "data", "control-sessions.json");
 string controlWindowsPackagePath = Path.Combine(AppContext.BaseDirectory, "data", "control-windows-update.zip");
 string controlMacPackagePath = Path.Combine(AppContext.BaseDirectory, "data", "control-macos-update.pkg");
-string latestWindowsControlVersion = "1.2.3";
-string latestMacControlVersion = "1.1.3";
+string latestWindowsControlVersion = "1.3.0";
+string latestMacControlVersion = "1.2.0";
 Directory.CreateDirectory(Path.GetDirectoryName(dataPath)!);
 
 var agents = new ConcurrentDictionary<string, AgentStatus>(StringComparer.OrdinalIgnoreCase);
@@ -60,14 +61,22 @@ foreach (AgentAuditEvent evento in await LoadStateAsync("audit", auditPath, new 
 
 app.Use(async (context, next) =>
 {
-    if (!context.Request.Path.StartsWithSegments("/health") &&
-        !context.Request.Path.StartsWithSegments("/solicitar") &&
-        (!context.Request.Headers.TryGetValue("X-ARES-Key", out var supplied) || supplied != apiKey))
+    bool publicPath = context.Request.Path.StartsWithSegments("/health") ||
+        context.Request.Path.StartsWithSegments("/solicitar") ||
+        context.Request.Path.Equals("/api/auth/login") ||
+        context.Request.Path.Equals("/api/auth/refresh");
+    bool validApiKey = context.Request.Headers.TryGetValue("X-ARES-Key", out var supplied) && supplied == apiKey;
+    AuthenticatedAdmin? admin = null;
+    string authorization = context.Request.Headers.Authorization.ToString();
+    if (authorization.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
+        admin = await authService.ValidateAsync(authorization[7..].Trim(), context.RequestAborted);
+    if (!publicPath && !validApiKey && admin is null)
     {
         context.Response.StatusCode = StatusCodes.Status401Unauthorized;
-        await context.Response.WriteAsJsonAsync(new { error = "Clave ARES inválida." });
+        await context.Response.WriteAsJsonAsync(new { error = "Sesión ARES inválida o vencida." });
         return;
     }
+    if (admin is not null) context.Items["AresAdmin"] = admin;
     await next();
 });
 
@@ -75,8 +84,25 @@ app.MapGet("/health", () => Results.Ok(new
 {
     service = "ARES Server",
     status = "ok",
-    storage = persistence.UsesDatabase ? "postgresql" : "json"
+    storage = persistence.UsesDatabase ? "postgresql" : "json",
+    authentication = authService.IsConfigured ? "configured" : "missing"
 }));
+
+app.MapPost("/api/auth/login", async (LoginRequest request, CancellationToken cancellationToken) =>
+{
+    if (string.IsNullOrWhiteSpace(request.Email) || string.IsNullOrEmpty(request.Password))
+        return Results.BadRequest(new { error = "Ingresá correo y contraseña." });
+    AuthResult? result = await authService.LoginAsync(request.Email.Trim(), request.Password, cancellationToken);
+    return result is null ? Results.Json(new { error = "Correo, contraseña o permisos inválidos." }, statusCode: 401) : Results.Ok(result);
+});
+
+app.MapPost("/api/auth/refresh", async (RefreshRequest request, CancellationToken cancellationToken) =>
+{
+    AuthResult? result = await authService.RefreshAsync(request.RefreshToken, cancellationToken);
+    return result is null ? Results.Json(new { error = "La sesión venció. Iniciá sesión nuevamente." }, statusCode: 401) : Results.Ok(result);
+});
+
+app.MapGet("/api/auth/me", (HttpContext context) => Results.Ok((AuthenticatedAdmin)context.Items["AresAdmin"]!));
 
 app.MapPost("/api/control-sessions/heartbeat", async (ControlSessionHeartbeat heartbeat, HttpRequest httpRequest) =>
 {

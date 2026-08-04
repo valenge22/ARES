@@ -26,6 +26,12 @@ Crear el usuario en **Supabase > Authentication > Users** y agregar en Render:
 - `ARES_OWNER_USER_ID`: UUID del usuario creado en Supabase Auth.
 - `ARES_OWNER_NAME`: nombre visible del propietario.
 
+Para habilitar el inicio de sesión de los paneles, agregar también:
+
+- `SUPABASE_URL`: URL pública del proyecto, por ejemplo `https://proyecto.supabase.co`.
+- `SUPABASE_ANON_KEY`: clave pública `anon`/publishable del proyecto. Nunca usar
+  la clave `service_role` en un panel ni publicarla en GitHub.
+
 Al desplegar, ARES registra o actualiza ese usuario con el rol `Owner`. La
 contraseña permanece exclusivamente en Supabase Auth.
 

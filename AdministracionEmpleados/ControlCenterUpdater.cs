@@ -15,8 +15,8 @@ internal static class ControlCenterUpdater
             Status = "Descargando";
             AresSettings settings = AresSettings.Cargar(); string root = Path.Combine(Path.GetTempPath(), "ARES-Control-Update");
             if (Directory.Exists(root)) Directory.Delete(root, true); Directory.CreateDirectory(root);
-            string zip = Path.Combine(root, "control.zip"); using var http = new HttpClient { Timeout = TimeSpan.FromMinutes(5) };
-            http.DefaultRequestHeaders.Add("X-ARES-Key", settings.ApiKey); await File.WriteAllBytesAsync(zip, await http.GetByteArrayAsync(url));
+            string zip = Path.Combine(root, "control.zip"); using var http = AresControlAuth.Client.CreateHttpClient(TimeSpan.FromMinutes(5));
+            await File.WriteAllBytesAsync(zip, await http.GetByteArrayAsync(url));
             string extracted = Path.Combine(root, "package"); ZipFile.ExtractToDirectory(zip, extracted);
             string source = Path.Combine(extracted, "app"); if (!File.Exists(Path.Combine(source, "ARES.ControlCenter.exe"))) throw new InvalidDataException("Paquete invalido.");
             string destination = AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar); string executable = Path.Combine(destination, "ARES.ControlCenter.exe");

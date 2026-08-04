@@ -19,12 +19,11 @@ public sealed class AgenteDiscoveryService
         CancellationToken cancelacion = default)
     {
         AresSettings configuracion = AresSettings.Cargar();
-        using var cliente = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
-        cliente.DefaultRequestHeaders.Add("X-ARES-Key", configuracion.ApiKey);
+        using var cliente = AresControlAuth.Client.CreateHttpClient(TimeSpan.FromSeconds(10));
         using HttpResponseMessage respuesta = await cliente.GetAsync(
             $"{configuracion.ServerUrl.TrimEnd('/')}/api/agents", cancelacion);
         if (respuesta.StatusCode == System.Net.HttpStatusCode.Unauthorized)
-            throw new InvalidOperationException("La clave ARES no coincide con la configurada en Render.");
+            throw new InvalidOperationException("La sesión venció. Iniciá sesión nuevamente.");
         respuesta.EnsureSuccessStatusCode();
         List<AgentStatus>? agentes = await respuesta.Content.ReadFromJsonAsync<List<AgentStatus>>(cancelacion);
 
@@ -82,8 +81,8 @@ public sealed class AgenteDiscoveryService
 
     public async Task CargarPaqueteActualizacionAsync(string path, string version, CancellationToken cancelacion = default)
     {
-        AresSettings settings = AresSettings.Cargar(); using var cliente = new HttpClient { Timeout = TimeSpan.FromMinutes(5) };
-        cliente.DefaultRequestHeaders.Add("X-ARES-Key", settings.ApiKey); using var content = new MultipartFormDataContent();
+        AresSettings settings = AresSettings.Cargar(); using var cliente = AresControlAuth.Client.CreateHttpClient(TimeSpan.FromMinutes(5));
+        using var content = new MultipartFormDataContent();
         await using FileStream stream = File.OpenRead(path); content.Add(new StreamContent(stream), "file", Path.GetFileName(path)); content.Add(new StringContent(version), "version");
         using HttpResponseMessage response = await cliente.PostAsync($"{settings.ServerUrl.TrimEnd('/')}/api/update-package", content, cancelacion); response.EnsureSuccessStatusCode();
     }
@@ -116,10 +115,7 @@ public sealed class AgenteDiscoveryService
 
     private static HttpClient CrearCliente()
     {
-        AresSettings settings = AresSettings.Cargar();
-        var cliente = new HttpClient { Timeout = TimeSpan.FromSeconds(20) };
-        cliente.DefaultRequestHeaders.Add("X-ARES-Key", settings.ApiKey);
-        return cliente;
+        return AresControlAuth.Client.CreateHttpClient(TimeSpan.FromSeconds(20));
     }
 
     public async Task<ControlSessionHeartbeatResponse> RegistrarSesionPanelAsync(CancellationToken cancelacion = default)
@@ -148,8 +144,8 @@ public sealed class AgenteDiscoveryService
 
     public async Task CargarPaquetePanelAsync(string platform, string path, CancellationToken cancelacion = default)
     {
-        AresSettings settings = AresSettings.Cargar(); using var client = new HttpClient { Timeout = TimeSpan.FromMinutes(5) };
-        client.DefaultRequestHeaders.Add("X-ARES-Key", settings.ApiKey); using var content = new MultipartFormDataContent();
+        AresSettings settings = AresSettings.Cargar(); using var client = AresControlAuth.Client.CreateHttpClient(TimeSpan.FromMinutes(5));
+        using var content = new MultipartFormDataContent();
         await using FileStream stream = File.OpenRead(path); content.Add(new StreamContent(stream), "file", Path.GetFileName(path));
         using HttpResponseMessage response = await client.PostAsync($"{settings.ServerUrl.TrimEnd('/')}/api/control-update/package/{platform}", content, cancelacion); response.EnsureSuccessStatusCode();
     }
@@ -164,21 +160,19 @@ public sealed class AgenteDiscoveryService
     public async Task EstablecerRestriccionAsync(string agentId, bool bloqueado, CancellationToken cancelacion = default)
     {
         AresSettings configuracion = AresSettings.Cargar();
-        using var cliente = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
-        cliente.DefaultRequestHeaders.Add("X-ARES-Key", configuracion.ApiKey);
+        using var cliente = AresControlAuth.Client.CreateHttpClient(TimeSpan.FromSeconds(10));
         using HttpResponseMessage respuesta = await cliente.PutAsJsonAsync(
             $"{configuracion.ServerUrl.TrimEnd('/')}/api/agents/{agentId}/restriction",
             new RestrictionRequest { Bloqueado = bloqueado }, cancelacion);
         if (respuesta.StatusCode == System.Net.HttpStatusCode.Unauthorized)
-            throw new InvalidOperationException("La clave ARES no coincide con Render.");
+            throw new InvalidOperationException("La sesión ARES venció.");
         respuesta.EnsureSuccessStatusCode();
     }
 
     public async Task<IReadOnlyList<AgentAuditEvent>> ObtenerAuditoriaAsync(CancellationToken cancelacion = default)
     {
         AresSettings configuracion = AresSettings.Cargar();
-        using var cliente = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
-        cliente.DefaultRequestHeaders.Add("X-ARES-Key", configuracion.ApiKey);
+        using var cliente = AresControlAuth.Client.CreateHttpClient(TimeSpan.FromSeconds(10));
         return await cliente.GetFromJsonAsync<List<AgentAuditEvent>>(
             $"{configuracion.ServerUrl.TrimEnd('/')}/api/audit", cancelacion) ?? [];
     }
@@ -186,8 +180,7 @@ public sealed class AgenteDiscoveryService
     public async Task BorrarEquiposAsync(CancellationToken cancelacion = default)
     {
         AresSettings configuracion = AresSettings.Cargar();
-        using var cliente = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
-        cliente.DefaultRequestHeaders.Add("X-ARES-Key", configuracion.ApiKey);
+        using var cliente = AresControlAuth.Client.CreateHttpClient(TimeSpan.FromSeconds(10));
         using HttpResponseMessage respuesta = await cliente.DeleteAsync(
             $"{configuracion.ServerUrl.TrimEnd('/')}/api/agents", cancelacion);
         respuesta.EnsureSuccessStatusCode();
@@ -195,8 +188,7 @@ public sealed class AgenteDiscoveryService
     public async Task RenombrarEquipoAsync(string agentId, string nombre, CancellationToken cancelacion = default)
     {
         AresSettings configuracion = AresSettings.Cargar();
-        using var cliente = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
-        cliente.DefaultRequestHeaders.Add("X-ARES-Key", configuracion.ApiKey);
+        using var cliente = AresControlAuth.Client.CreateHttpClient(TimeSpan.FromSeconds(10));
         using HttpResponseMessage respuesta = await cliente.PutAsJsonAsync(
             $"{configuracion.ServerUrl.TrimEnd('/')}/api/agents/{agentId}/name",
             new RenameAgentRequest { Nombre = nombre }, cancelacion);

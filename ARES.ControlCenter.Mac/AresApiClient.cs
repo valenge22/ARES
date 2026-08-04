@@ -50,4 +50,23 @@ internal sealed class AresApiClient
         using var response = await http.SendAsync(request);
         response.EnsureSuccessStatusCode();
     }
+    public async Task SetGroupAsync(string id, string group)
+    {
+        using var request = Request(HttpMethod.Put, $"/api/agents/{Uri.EscapeDataString(id)}/group"); request.Content = JsonContent.Create(new GroupRequest { Grupo = group });
+        using var response = await http.SendAsync(request); response.EnsureSuccessStatusCode();
+    }
+    public async Task OverrideAsync(string id, DateTimeOffset untilUtc)
+    {
+        using var request = Request(HttpMethod.Put, $"/api/agents/{Uri.EscapeDataString(id)}/override"); request.Content = JsonContent.Create(new TemporaryOverrideRequest { PermitirUso = true, HastaUtc = untilUtc, Motivo = "Excepcion desde panel macOS" });
+        using var response = await http.SendAsync(request); response.EnsureSuccessStatusCode();
+    }
+    public async Task UpdateAgentAsync(string id)
+    {
+        using var request = Request(HttpMethod.Post, $"/api/agents/{Uri.EscapeDataString(id)}/update"); using var response = await http.SendAsync(request); response.EnsureSuccessStatusCode();
+    }
+    public async Task<ScheduleState> ScheduleAsync()
+    {
+        using var request = Request(HttpMethod.Get, "/api/schedule"); using var response = await http.SendAsync(request); response.EnsureSuccessStatusCode();
+        return await response.Content.ReadFromJsonAsync<ScheduleState>() ?? new();
+    }
 }

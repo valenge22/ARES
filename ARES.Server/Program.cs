@@ -3,8 +3,14 @@ using System.Collections.Concurrent;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using Microsoft.AspNetCore.Http.Features;
+using System.IO.Compression;
+using System.Net;
+using System.Net.Mail;
+using System.Net.Http.Json;
 
 var builder = WebApplication.CreateBuilder(args);
+builder.Services.Configure<FormOptions>(options => options.MultipartBodyLengthLimit = 100 * 1024 * 1024);
 var app = builder.Build();
 
 string apiKey = builder.Configuration["ARES_API_KEY"]
@@ -13,6 +19,10 @@ string apiKey = builder.Configuration["ARES_API_KEY"]
 string dataPath = Path.Combine(AppContext.BaseDirectory, "data", "agents.json");
 string auditPath = Path.Combine(AppContext.BaseDirectory, "data", "audit.json");
 string schedulePath = Path.Combine(AppContext.BaseDirectory, "data", "schedule.json");
+string historyPath = Path.Combine(AppContext.BaseDirectory, "data", "schedule-history.json");
+string policiesPath = Path.Combine(AppContext.BaseDirectory, "data", "group-policies.json");
+string updatePackagePath = Path.Combine(AppContext.BaseDirectory, "data", "agent-update.zip");
+string updateVersionPath = Path.Combine(AppContext.BaseDirectory, "data", "agent-update-version.txt");
 Directory.CreateDirectory(Path.GetDirectoryName(dataPath)!);
 
 var agents = new ConcurrentDictionary<string, AgentStatus>(StringComparer.OrdinalIgnoreCase);
@@ -22,6 +32,18 @@ var requestLimits = new ConcurrentDictionary<string, DateTimeOffset>(StringCompa
 ScheduleState schedule = File.Exists(schedulePath)
     ? JsonSerializer.Deserialize<ScheduleState>(File.ReadAllText(schedulePath)) ?? new()
     : new();
+var scheduleHistory = File.Exists(historyPath)
+    ? JsonSerializer.Deserialize<List<ScheduleRevision>>(File.ReadAllText(historyPath)) ?? []
+    : new List<ScheduleRevision>();
+var groupPolicies = File.Exists(policiesPath)
+    ? JsonSerializer.Deserialize<List<GroupPolicy>>(File.ReadAllText(policiesPath)) ?? []
+    : new List<GroupPolicy>();
+foreach (string group in new[] { "Grupo 1", "Grupo 2", "Grupo 3" })
+    if (!groupPolicies.Any(p => p.Grupo == group)) groupPolicies.Add(new GroupPolicy { Grupo = group });
+string latestAgentVersion = builder.Configuration["ARES_LATEST_AGENT_VERSION"] ?? "1.6.0";
+string agentUpdateUrl = builder.Configuration["ARES_AGENT_UPDATE_URL"]
+    ?? "https://github.com/valenge22/ARES/releases/download/v1.6.0/ARES-Agent-Windows-x64.zip";
+if (File.Exists(updateVersionPath)) latestAgentVersion = File.ReadAllText(updateVersionPath).Trim();
 if (File.Exists(dataPath))
 {
     foreach (AgentStatus agent in JsonSerializer.Deserialize<List<AgentStatus>>(File.ReadAllText(dataPath)) ?? [])
@@ -48,7 +70,7 @@ app.Use(async (context, next) =>
 
 app.MapGet("/health", () => Results.Ok(new { service = "ARES Server", status = "ok" }));
 
-app.MapPost("/api/agents/heartbeat", async (AgentHeartbeat heartbeat) =>
+app.MapPost("/api/agents/heartbeat", async (AgentHeartbeat heartbeat, HttpRequest httpRequest) =>
 {
     if (string.IsNullOrWhiteSpace(heartbeat.Id) || string.IsNullOrWhiteSpace(heartbeat.Equipo))
         return Results.BadRequest(new { error = "Identidad de agente incompleta." });
@@ -74,6 +96,9 @@ app.MapPost("/api/agents/heartbeat", async (AgentHeartbeat heartbeat) =>
             existente.Usuario = heartbeat.Usuario;
             existente.Sistema = heartbeat.Sistema;
             existente.Version = heartbeat.Version;
+            existente.MotivoEstadoLocal = heartbeat.MotivoEstadoLocal;
+            existente.HorarioVersionAplicada = heartbeat.HorarioVersionAplicada;
+            existente.BloqueadoLocalmente = heartbeat.BloqueadoLocalmente;
             existente.UltimaConexionUtc = ahora;
             existente.EstaEnLinea = true;
             if (!string.IsNullOrWhiteSpace(heartbeat.RequestToken))
@@ -83,6 +108,9 @@ app.MapPost("/api/agents/heartbeat", async (AgentHeartbeat heartbeat) =>
     if (!estabaEnLinea)
         await RegistrarEventoAsync(heartbeat.Id, heartbeat.Equipo, "AGENTE_CONECTADO", "ARES Agent inició o recuperó la conexión.");
     await GuardarAsync();
+    GroupPolicy policy = groupPolicies.FirstOrDefault(p => p.Grupo == agenteActual.Grupo) ?? new();
+    bool actualizarAhora = agenteActual.ActualizacionSolicitada && heartbeat.EsServicioSistema;
+    if (actualizarAhora) agenteActual.ActualizacionSolicitada = false;
     return Results.Ok(new HeartbeatResponse
     {
         Accepted = true,
@@ -90,6 +118,15 @@ app.MapPost("/api/agents/heartbeat", async (AgentHeartbeat heartbeat) =>
         BloqueadoAdministrativamente = agenteActual.BloqueadoAdministrativamente
         ,HorarioVersion = schedule.Version
         ,Horarios = schedule.Horarios.Where(h => h.AgentId.Equals(heartbeat.Id, StringComparison.OrdinalIgnoreCase)).ToList()
+        ,ExcepcionHastaUtc = agenteActual.ExcepcionHastaUtc
+        ,ExcepcionPermitirUso = agenteActual.ExcepcionPermitirUso
+        ,MargenEntradaMinutos = policy.MargenEntradaMinutos
+        ,MargenSalidaMinutos = policy.MargenSalidaMinutos
+        ,UltimaVersion = latestAgentVersion
+        ,UrlActualizacion = File.Exists(updatePackagePath)
+            ? $"{httpRequest.Scheme}://{httpRequest.Host}/api/update-package/download"
+            : agentUpdateUrl
+        ,ActualizarAhora = actualizarAhora
     });
 });
 
@@ -104,6 +141,18 @@ app.MapPut("/api/agents/{id}/group", async (string id, GroupRequest request) =>
 });
 
 app.MapGet("/api/schedule", () => schedule);
+app.MapGet("/api/schedule/history", () => scheduleHistory.OrderByDescending(x => x.FechaUtc).Take(20));
+app.MapGet("/api/group-policies", () => groupPolicies);
+
+app.MapPut("/api/group-policies", async (GroupPoliciesRequest request) =>
+{
+    if (request.Grupos.Any(x => x.MargenEntradaMinutos is < 0 or > 180 || x.MargenSalidaMinutos is < 0 or > 180))
+        return Results.BadRequest(new { error = "Los margenes deben estar entre 0 y 180 minutos." });
+    groupPolicies = request.Grupos.Where(x => new[] { "Grupo 1", "Grupo 2", "Grupo 3" }.Contains(x.Grupo)).ToList();
+    await File.WriteAllTextAsync(policiesPath, JsonSerializer.Serialize(groupPolicies, new JsonSerializerOptions { WriteIndented = true }));
+    await RegistrarEventoAsync("SERVER", "Servidor ARES", "POLITICAS_GRUPO_ACTUALIZADAS", "Se actualizaron los margenes de entrada y salida.");
+    return Results.Ok(groupPolicies);
+});
 
 app.MapPut("/api/schedule", async (SchedulePublication publication) =>
 {
@@ -111,6 +160,8 @@ app.MapPut("/api/schedule", async (SchedulePublication publication) =>
         return Results.BadRequest(new { error = "Mes o anio invalido." });
     if (publication.Horarios.Any(h => h.FinUtc <= h.InicioUtc || string.IsNullOrWhiteSpace(h.AgentId)))
         return Results.BadRequest(new { error = "Hay turnos invalidos o sin equipo asignado." });
+    if (schedule.Version > 0)
+        scheduleHistory.Add(new ScheduleRevision { FechaUtc = DateTimeOffset.UtcNow, Accion = "Reemplazada", Estado = ClonarHorario(schedule) });
     schedule = new ScheduleState
     {
         Mes = publication.Mes, Anio = publication.Anio,
@@ -118,10 +169,73 @@ app.MapPut("/api/schedule", async (SchedulePublication publication) =>
         Horarios = publication.Horarios, Version = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
         PublicadoUtc = DateTimeOffset.UtcNow
     };
-    await File.WriteAllTextAsync(schedulePath, JsonSerializer.Serialize(schedule, new JsonSerializerOptions { WriteIndented = true }));
+    scheduleHistory.Add(new ScheduleRevision { FechaUtc = DateTimeOffset.UtcNow, Accion = "Publicada", Estado = ClonarHorario(schedule) });
+    while (scheduleHistory.Count > 30) scheduleHistory.RemoveAt(0);
+    await GuardarHorariosAsync();
     await RegistrarEventoAsync("SERVER", "Servidor ARES", "HORARIOS_PUBLICADOS",
         $"Se publicaron {schedule.Horarios.Count} turnos para {schedule.Mes:00}/{schedule.Anio}.");
     return Results.Ok(schedule);
+});
+
+app.MapPost("/api/schedule/rollback", async (RollbackScheduleRequest request) =>
+{
+    ScheduleRevision? revision = scheduleHistory.FirstOrDefault(x => x.Id == request.RevisionId);
+    if (revision is null) return Results.NotFound(new { error = "Revision no encontrada." });
+    scheduleHistory.Add(new ScheduleRevision { FechaUtc = DateTimeOffset.UtcNow, Accion = "Antes de restaurar", Estado = ClonarHorario(schedule) });
+    schedule = ClonarHorario(revision.Estado); schedule.Version = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(); schedule.PublicadoUtc = DateTimeOffset.UtcNow;
+    await GuardarHorariosAsync();
+    await RegistrarEventoAsync("SERVER", "Servidor ARES", "HORARIOS_RESTAURADOS", $"Se restauro la revision {revision.Id}.");
+    return Results.Ok(schedule);
+});
+
+app.MapPut("/api/agents/{id}/override", async (string id, TemporaryOverrideRequest request) =>
+{
+    if (!agents.TryGetValue(id, out AgentStatus? agente)) return Results.NotFound();
+    if (request.HastaUtc <= DateTimeOffset.UtcNow || request.HastaUtc > DateTimeOffset.UtcNow.AddDays(31))
+        return Results.BadRequest(new { error = "La excepcion debe vencer en el futuro y dentro de 31 dias." });
+    agente.ExcepcionPermitirUso = request.PermitirUso; agente.ExcepcionHastaUtc = request.HastaUtc;
+    await RegistrarEventoAsync(id, agente.Equipo, request.PermitirUso ? "EXCEPCION_DESBLOQUEO" : "EXCEPCION_BLOQUEO",
+        $"{request.Motivo}. Vigente hasta {request.HastaUtc:u}.");
+    await GuardarAsync(); return Results.Ok();
+});
+
+app.MapPost("/api/agents/{id}/update", async (string id) =>
+{
+    if (!agents.TryGetValue(id, out AgentStatus? agente)) return Results.NotFound();
+    agente.ActualizacionSolicitada = true;
+    await RegistrarEventoAsync(id, agente.Equipo, "ACTUALIZACION_SOLICITADA", $"Se solicito actualizar ARES Agent a {latestAgentVersion}.");
+    await GuardarAsync(); return Results.Ok();
+});
+
+app.MapPost("/api/update-package", async (HttpRequest request) =>
+{
+    IFormCollection form = await request.ReadFormAsync();
+    IFormFile? file = form.Files.FirstOrDefault();
+    string version = form["version"].ToString().Trim();
+    if (file is null || file.Length is < 1 or > 100_000_000 || !file.FileName.EndsWith(".zip", StringComparison.OrdinalIgnoreCase))
+        return Results.BadRequest(new { error = "Selecciona el ZIP oficial de ARES Agent." });
+    if (!Version.TryParse(version, out _)) return Results.BadRequest(new { error = "Version invalida." });
+    await using (FileStream output = File.Create(updatePackagePath)) await file.CopyToAsync(output);
+    try
+    {
+        using ZipArchive archive = ZipFile.OpenRead(updatePackagePath);
+        if (!archive.Entries.Any(x => x.FullName.Replace('\\', '/').Equals("app/ARES.Agent.exe", StringComparison.OrdinalIgnoreCase)))
+        { File.Delete(updatePackagePath); return Results.BadRequest(new { error = "El ZIP no contiene app/ARES.Agent.exe." }); }
+    }
+    catch (InvalidDataException) { File.Delete(updatePackagePath); return Results.BadRequest(new { error = "El archivo no es un ZIP valido." }); }
+    latestAgentVersion = version; await File.WriteAllTextAsync(updateVersionPath, version);
+    await RegistrarEventoAsync("SERVER", "Servidor ARES", "PAQUETE_ACTUALIZACION_CARGADO", $"Paquete ARES Agent {version} disponible para despliegue remoto.");
+    return Results.Ok(new { version, bytes = file.Length });
+}).DisableAntiforgery();
+
+app.MapGet("/api/update-package/download", () => File.Exists(updatePackagePath)
+    ? Results.File(updatePackagePath, "application/zip", "ARES-Agent-Update.zip")
+    : Results.NotFound());
+
+app.MapDelete("/api/agents/{id}/override", async (string id) =>
+{
+    if (!agents.TryGetValue(id, out AgentStatus? agente)) return Results.NotFound();
+    agente.ExcepcionPermitirUso = null; agente.ExcepcionHastaUtc = null; await GuardarAsync(); return Results.Ok();
 });
 
 app.MapPut("/api/agents/{id}/restriction", async (string id, RestrictionRequest request) =>
@@ -143,7 +257,7 @@ app.MapPost("/api/agents/{id}/unlock-request", async (string id) =>
 {
     if (!agents.TryGetValue(id, out AgentStatus? agente))
         return Results.NotFound(new { error = "El agente no está registrado." });
-    if (!agente.BloqueadoAdministrativamente)
+    if (!agente.BloqueadoAdministrativamente && !agente.BloqueadoLocalmente && CalcularMotivo(agente) is not "Fuera del horario" and not "Excepcion: bloqueo temporal")
         return Results.Conflict(new { error = "El equipo no está bloqueado." });
 
     if (!agente.SolicitudDesbloqueoPendiente)
@@ -225,12 +339,21 @@ app.MapGet("/api/agents", () =>
         {
             Id = a.Id, Equipo = a.Equipo, Usuario = a.Usuario, Sistema = a.Sistema,
             Version = a.Version, UltimaConexionUtc = a.UltimaConexionUtc,
+            BloqueadoLocalmente = a.BloqueadoLocalmente, MotivoEstadoLocal = a.MotivoEstadoLocal,
+            HorarioVersionAplicada = a.HorarioVersionAplicada,
             EstaEnLinea = a.UltimaConexionUtc >= limite,
             BloqueadoAdministrativamente = a.BloqueadoAdministrativamente,
             SolicitudDesbloqueoPendiente = a.SolicitudDesbloqueoPendiente,
             SolicitudDesbloqueoUtc = a.SolicitudDesbloqueoUtc,
             NombrePersonalizado = a.NombrePersonalizado
             ,Grupo = a.Grupo
+            ,ExcepcionHastaUtc = a.ExcepcionHastaUtc
+            ,ExcepcionPermitirUso = a.ExcepcionPermitirUso
+            ,MotivoBloqueo = CalcularMotivo(a)
+            ,ProximoCambioUtc = CalcularProximoCambio(a.Id)
+            ,ActualizacionDisponible = Version.TryParse(latestAgentVersion, out var latest) && Version.TryParse(a.Version, out var current) && latest > current
+            ,UltimaVersion = latestAgentVersion
+            ,HorarioPendienteSincronizar = schedule.Horarios.Any(x => x.AgentId.Equals(a.Id, StringComparison.OrdinalIgnoreCase)) && a.HorarioVersionAplicada < schedule.Version
         })
         .OrderBy(a => a.Equipo);
 });
@@ -276,6 +399,35 @@ async Task RegistrarEventoAsync(string agentId, string equipo, string tipo, stri
     });
     while (audit.Count > 2000) audit.TryDequeue(out _);
     await GuardarAuditoriaAsync();
+    if (tipo is "SOLICITUD_DESBLOQUEO" or "AGENTE_DESCONECTADO" or "ACTUALIZACION_SOLICITADA")
+        await EnviarAlertaExternaAsync(equipo, tipo, detalle);
+}
+
+async Task EnviarAlertaExternaAsync(string equipo, string tipo, string detalle)
+{
+    string message = $"ARES - {tipo}\nEquipo: {equipo}\n{detalle}";
+    try
+    {
+        string? token = Environment.GetEnvironmentVariable("ARES_TELEGRAM_BOT_TOKEN");
+        string? chat = Environment.GetEnvironmentVariable("ARES_TELEGRAM_CHAT_ID");
+        if (!string.IsNullOrWhiteSpace(token) && !string.IsNullOrWhiteSpace(chat))
+            using (var http = new HttpClient { Timeout = TimeSpan.FromSeconds(10) })
+                await http.PostAsJsonAsync($"https://api.telegram.org/bot{token}/sendMessage", new { chat_id = chat, text = message });
+    }
+    catch { }
+    try
+    {
+        string? host = Environment.GetEnvironmentVariable("ARES_SMTP_HOST");
+        string? to = Environment.GetEnvironmentVariable("ARES_ALERT_EMAIL_TO");
+        string? from = Environment.GetEnvironmentVariable("ARES_SMTP_FROM");
+        if (string.IsNullOrWhiteSpace(host) || string.IsNullOrWhiteSpace(to) || string.IsNullOrWhiteSpace(from)) return;
+        int.TryParse(Environment.GetEnvironmentVariable("ARES_SMTP_PORT"), out int port); if (port == 0) port = 587;
+        using var smtp = new SmtpClient(host, port) { EnableSsl = true };
+        string? user = Environment.GetEnvironmentVariable("ARES_SMTP_USER"); string? password = Environment.GetEnvironmentVariable("ARES_SMTP_PASSWORD");
+        if (!string.IsNullOrWhiteSpace(user)) smtp.Credentials = new NetworkCredential(user, password);
+        using var mail = new MailMessage(from, to, $"ARES: {tipo} - {equipo}", message); await smtp.SendMailAsync(mail);
+    }
+    catch { }
 }
 
 async Task GuardarAuditoriaAsync()
@@ -302,4 +454,33 @@ async Task GuardarAsync()
         File.Move(temporal, dataPath, true);
     }
     finally { saveLock.Release(); }
+}
+
+async Task GuardarHorariosAsync()
+{
+    var options = new JsonSerializerOptions { WriteIndented = true };
+    await File.WriteAllTextAsync(schedulePath, JsonSerializer.Serialize(schedule, options));
+    await File.WriteAllTextAsync(historyPath, JsonSerializer.Serialize(scheduleHistory, options));
+}
+
+ScheduleState ClonarHorario(ScheduleState value) => JsonSerializer.Deserialize<ScheduleState>(JsonSerializer.Serialize(value)) ?? new();
+
+string CalcularMotivo(AgentStatus agent)
+{
+    DateTimeOffset now = DateTimeOffset.UtcNow;
+    if (agent.ExcepcionHastaUtc > now && agent.ExcepcionPermitirUso.HasValue)
+        return agent.ExcepcionPermitirUso.Value ? "Excepcion: uso permitido" : "Excepcion: bloqueo temporal";
+    if (agent.BloqueadoAdministrativamente) return "Bloqueo manual";
+    List<ScheduleInterval> own = schedule.Horarios.Where(x => x.AgentId.Equals(agent.Id, StringComparison.OrdinalIgnoreCase)).ToList();
+    if (own.Count == 0) return "Sin horario asignado";
+    GroupPolicy policy = groupPolicies.FirstOrDefault(x => x.Grupo == agent.Grupo) ?? new();
+    bool inside = own.Any(x => now >= x.InicioUtc.AddMinutes(-policy.MargenEntradaMinutos) && now < x.FinUtc.AddMinutes(policy.MargenSalidaMinutos));
+    return inside ? "Dentro del turno" : "Fuera del horario";
+}
+
+DateTimeOffset? CalcularProximoCambio(string agentId)
+{
+    DateTimeOffset now = DateTimeOffset.UtcNow;
+    return schedule.Horarios.Where(x => x.AgentId.Equals(agentId, StringComparison.OrdinalIgnoreCase))
+        .SelectMany(x => new[] { x.InicioUtc, x.FinUtc }).Where(x => x > now).OrderBy(x => x).Cast<DateTimeOffset?>().FirstOrDefault();
 }

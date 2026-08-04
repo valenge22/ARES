@@ -11,5 +11,11 @@
         public DateTimeOffset? SolicitudDesbloqueoUtc { get; set; }
         public bool EstaLogueada { get; set; }
         public string SistemaOperativo { get; set; } = "";
+        public string MotivoBloqueo { get; set; } = "";
+        public DateTimeOffset? ProximoCambioUtc { get; set; }
+        public DateTimeOffset? ExcepcionHastaUtc { get; set; }
+        public bool ActualizacionDisponible { get; set; }
+        public string Version { get; set; } = "";
+        public string UltimaVersion { get; set; } = "";
     }
 }

@@ -3,6 +3,7 @@ using System.Net.Http.Json;
 using System.Security.Cryptography;
 using System.Text;
 using Microsoft.Win32;
+using System.Security.Principal;
 
 namespace ARES.Agent.Servicios;
 
@@ -12,6 +13,7 @@ public sealed class NetworkService : IDisposable
     private readonly AgentSettings configuracion = AgentSettings.Cargar();
     private readonly string agentId = ObtenerIdEquipo();
     private readonly SchedulePolicy schedule = new();
+    private string motivoActual = "Iniciando";
     public event Action<string, bool>? EstadoCambiado;
     public event Action<bool>? RestriccionCambiada;
 
@@ -34,6 +36,9 @@ public sealed class NetworkService : IDisposable
                     Version = typeof(NetworkService).Assembly.GetName().Version?.ToString(3) ?? "1.3.1",
                     BloqueadoLocalmente = LeerEstadoLocal()
                     ,RequestToken = configuracion.RequestToken
+                    ,MotivoEstadoLocal = motivoActual
+                    ,HorarioVersionAplicada = schedule.Version
+                    ,EsServicioSistema = WindowsIdentity.GetCurrent().IsSystem
                 };
 
                 using HttpResponseMessage respuesta = await cliente.PostAsJsonAsync(
@@ -44,16 +49,20 @@ public sealed class NetworkService : IDisposable
                 if (politica != null)
                 {
                     schedule.Update(politica);
-                    RestriccionCambiada?.Invoke(politica.BloqueadoAdministrativamente ||
-                        (schedule.MustBlock(politica.ServerTimeUtc) ?? false));
+                    PolicyDecision decision = schedule.Evaluate(politica.BloqueadoAdministrativamente, politica.ServerTimeUtc);
+                    motivoActual = decision.Reason;
+                    RestriccionCambiada?.Invoke(decision.Blocked);
+                    if (politica.ActualizarAhora)
+                        _ = AgentUpdater.StartAsync(politica.UrlActualizacion, configuracion.ApiKey);
                 }
                 EstadoCambiado?.Invoke("Conectado al servidor remoto", true);
             }
             catch (OperationCanceledException) when (cancelacion.IsCancellationRequested) { break; }
             catch (Exception ex)
             {
-                bool? porHorario = schedule.MustBlock(DateTimeOffset.UtcNow);
-                if (porHorario.HasValue) RestriccionCambiada?.Invoke(porHorario.Value);
+                PolicyDecision local = schedule.Evaluate(null, DateTimeOffset.UtcNow);
+                motivoActual = local.Reason;
+                RestriccionCambiada?.Invoke(local.Blocked);
                 EstadoCambiado?.Invoke($"Sin conexión: {ex.Message}", false);
             }
 

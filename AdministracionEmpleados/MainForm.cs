@@ -12,6 +12,10 @@ namespace AdministracionEmpleados
         private readonly Dictionary<Button, (string Titulo, string Subtitulo)> secciones;
         private Button? botonActivo;
         private bool buscandoEquipos;
+        private string grupoVisible = "Todos";
+        private readonly HashSet<string> alertasMostradas = [];
+        private HashSet<string>? conectadosAnteriores;
+        private readonly NotifyIcon notificador = new() { Icon = SystemIcons.Shield, Visible = true, Text = "ARES Centro de Control" };
 
         public MainForm()
         {
@@ -57,6 +61,17 @@ namespace AdministracionEmpleados
                 empleadoService.ActualizarEquiposDetectados(detectados);
 
                 int conectados = detectados.Count;
+                HashSet<string> actuales = detectados.Select(x => x.Id).ToHashSet(StringComparer.OrdinalIgnoreCase);
+                if (conectadosAnteriores is not null)
+                    foreach (string desconectado in conectadosAnteriores.Except(actuales))
+                        MostrarAlerta($"Equipo desconectado: {empleadoService.ObtenerEmpleados().FirstOrDefault(x => x.Computadora.AgentId == desconectado)?.Computadora.Nombre ?? desconectado}");
+                conectadosAnteriores = actuales;
+                foreach (AgenteDetectado agente in detectados.Where(x => x.SolicitudDesbloqueo))
+                    if (alertasMostradas.Add("unlock-" + agente.Id)) MostrarAlerta($"Solicitud de desbloqueo: {agente.Equipo}");
+                foreach (AgenteDetectado agente in detectados.Where(x => x.ActualizacionDisponible))
+                    if (alertasMostradas.Add("update-" + agente.Id)) MostrarAlerta($"Actualizacion disponible para {agente.Equipo}: {agente.UltimaVersion}");
+                foreach (AgenteDetectado agente in detectados.Where(x => x.HorarioPendiente))
+                    if (alertasMostradas.Add("schedule-" + agente.Id)) MostrarAlerta($"{agente.Equipo} aun no recibio la nueva programacion.");
                 lblPuntoConexion.ForeColor = conectados > 0 ? Color.FromArgb(34, 197, 94) : Color.FromArgb(239, 68, 68);
                 lblConexion.ForeColor = conectados > 0 ? Color.FromArgb(22, 101, 52) : Color.FromArgb(153, 27, 27);
                 pnlEstadoConexion.BackColor = conectados > 0 ? Color.FromArgb(240, 253, 244) : Color.FromArgb(254, 242, 242);
@@ -153,6 +168,8 @@ namespace AdministracionEmpleados
                 finally { borrar.Enabled = true; }
             };
             encabezado.Padding = new Padding(22, 13, 18, 13);
+            var carpetas = CrearSelectorCarpetas();
+            encabezado.Controls.Add(carpetas);
             encabezado.Controls.Add(borrar);
             encabezado.Controls.Add(actualizar);
             var tabla = CrearTablaEquipos();
@@ -207,20 +224,25 @@ namespace AdministracionEmpleados
             tabla.Columns.Add(new DataGridViewTextBoxColumn { Name = "Usuario", HeaderText = "USUARIO", FillWeight = 110 });
             tabla.Columns.Add(new DataGridViewTextBoxColumn { Name = "IP", HeaderText = "DIRECCIÓN IP", FillWeight = 100 });
             tabla.Columns.Add(new DataGridViewTextBoxColumn { Name = "Solicitud", HeaderText = "SOLICITUD", FillWeight = 120 });
+            tabla.Columns.Add(new DataGridViewTextBoxColumn { Name = "Motivo", HeaderText = "MOTIVO / PROXIMO CAMBIO", FillWeight = 135 });
             tabla.Columns.Add(new DataGridViewTextBoxColumn { Name = "Grupo", HeaderText = "GRUPO", FillWeight = 70 });
             tabla.Columns.Add(new DataGridViewButtonColumn { Name = "CambiarGrupo", HeaderText = "", Text = "Mover", UseColumnTextForButtonValue = true, FillWeight = 55, FlatStyle = FlatStyle.Flat });
+            tabla.Columns.Add(new DataGridViewButtonColumn { Name = "Excepcion", HeaderText = "", Text = "Excepcion", UseColumnTextForButtonValue = true, FillWeight = 65, FlatStyle = FlatStyle.Flat });
+            tabla.Columns.Add(new DataGridViewButtonColumn { Name = "ActualizarAgente", HeaderText = "VERSION", FillWeight = 65, FlatStyle = FlatStyle.Flat });
             tabla.Columns.Add(new DataGridViewButtonColumn { Name = "Renombrar", HeaderText = "", Text = "Cambiar nombre", UseColumnTextForButtonValue = true, FillWeight = 85, FlatStyle = FlatStyle.Flat });
             tabla.Columns.Add(new DataGridViewButtonColumn { Name = "Ver", HeaderText = "", Text = "Ver", UseColumnTextForButtonValue = true, FillWeight = 55, FlatStyle = FlatStyle.Flat });
             tabla.Columns.Add(new DataGridViewButtonColumn { Name = "Accion", HeaderText = "ACCIÓN", FillWeight = 85, FlatStyle = FlatStyle.Flat });
 
-            foreach (Empleado empleado in empleadoService.ObtenerEmpleados())
+            foreach (Empleado empleado in empleadoService.ObtenerEmpleados().Where(x => grupoVisible == "Todos" || x.Grupo == grupoVisible).OrderBy(x => x.Grupo).ThenBy(x => x.Nombre))
             {
                 Computadora pc = empleado.Computadora;
                 string indicador = pc.EstaEncendida ? "●  " : "●  ";
                 int fila = tabla.Rows.Add(indicador + pc.Nombre,
                     pc.EstaBloqueada ? "Bloqueado" : "Desbloqueado",
                     empleado.Nombre, pc.DireccionIP,
-                    pc.SolicitudDesbloqueoPendiente ? "🔔 Desbloqueo solicitado" : "—", empleado.Grupo, "Mover", "Cambiar nombre", "Ver",
+                    pc.SolicitudDesbloqueoPendiente ? "🔔 Desbloqueo solicitado" : "—",
+                    pc.MotivoBloqueo + (pc.ProximoCambioUtc.HasValue ? $"\n{pc.ProximoCambioUtc.Value.ToLocalTime():dd/MM HH:mm}" : ""),
+                    empleado.Grupo, "Mover", "Excepcion", pc.ActualizacionDisponible ? $"Actualizar {pc.UltimaVersion}" : $"v{pc.Version}", "Cambiar nombre", "Ver",
                     pc.EstaBloqueada ? "Desbloquear" : "Bloquear");
                 tabla.Rows[fila].Tag = empleado;
                 tabla.Rows[fila].Cells[0].Style.ForeColor = pc.EstaEncendida
@@ -249,6 +271,32 @@ namespace AdministracionEmpleados
                     if (grupo is null) return;
                     try { await discoveryService.EstablecerGrupoAsync(empleado.Computadora.AgentId, grupo); await BuscarEquiposAsync(); }
                     catch (Exception ex) { MessageBox.Show($"No se pudo cambiar el grupo.\n\n{ex.Message}", "ARES", MessageBoxButtons.OK, MessageBoxIcon.Error); }
+                }
+                else if (tabla.Columns[e.ColumnIndex].Name == "Excepcion")
+                {
+                    var seleccion = PedirExcepcion(empleado.Computadora.ExcepcionHastaUtc);
+                    if (seleccion is null) return;
+                    try
+                    {
+                        if (seleccion.Value.Quitar) await discoveryService.QuitarExcepcionAsync(empleado.Computadora.AgentId);
+                        else await discoveryService.EstablecerExcepcionAsync(empleado.Computadora.AgentId, seleccion.Value.Hasta.ToUniversalTime(), seleccion.Value.Permitir);
+                        await BuscarEquiposAsync();
+                    }
+                    catch (Exception ex) { MessageBox.Show(ex.Message, "ARES", MessageBoxButtons.OK, MessageBoxIcon.Error); }
+                }
+                else if (tabla.Columns[e.ColumnIndex].Name == "ActualizarAgente")
+                {
+                    if (!empleado.Computadora.ActualizacionDisponible) return;
+                    if (MessageBox.Show($"Actualizar {empleado.Computadora.Nombre} a ARES Agent {empleado.Computadora.UltimaVersion}?", "ARES", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
+                    try
+                    {
+                        using var file = new OpenFileDialog { Filter = "Paquete ARES Agent (*.zip)|*.zip", Title = "Selecciona el instalador ZIP de la version nueva" };
+                        if (file.ShowDialog(this) != DialogResult.OK) return;
+                        await discoveryService.CargarPaqueteActualizacionAsync(file.FileName, empleado.Computadora.UltimaVersion);
+                        await discoveryService.SolicitarActualizacionAsync(empleado.Computadora.AgentId);
+                        MessageBox.Show("Paquete cargado. La actualizacion comenzara en el proximo heartbeat.", "ARES");
+                    }
+                    catch (Exception ex) { MessageBox.Show(ex.Message, "ARES", MessageBoxButtons.OK, MessageBoxIcon.Error); }
                 }
                 else if (tabla.Columns[e.ColumnIndex].Name == "Ver")
                 {
@@ -310,12 +358,28 @@ namespace AdministracionEmpleados
             return dialogo.ShowDialog() == DialogResult.OK ? lista.SelectedItem?.ToString() : null;
         }
 
+        private static (DateTimeOffset Hasta, bool Permitir, bool Quitar)? PedirExcepcion(DateTimeOffset? actual)
+        {
+            using var form = new Form { Text = "Excepcion temporal", Width = 455, Height = 245, StartPosition = FormStartPosition.CenterParent, FormBorderStyle = FormBorderStyle.FixedDialog };
+            var until = new DateTimePicker { Left = 22, Top = 48, Width = 390, Format = DateTimePickerFormat.Custom, CustomFormat = "dd/MM/yyyy HH:mm", Value = actual?.ToLocalTime().DateTime ?? DateTime.Now.AddHours(2) };
+            var mode = new ComboBox { Left = 22, Top = 105, Width = 390, DropDownStyle = ComboBoxStyle.DropDownList };
+            mode.Items.AddRange(["Permitir uso hasta esa hora", "Bloquear hasta esa hora"]); mode.SelectedIndex = 0;
+            var save = new Button { Text = "Aplicar", Left = 312, Top = 150, Width = 100, DialogResult = DialogResult.OK };
+            var remove = new Button { Text = "Quitar excepcion", Left = 175, Top = 150, Width = 128, DialogResult = DialogResult.Retry };
+            form.Controls.AddRange([new Label { Text = "Vigente hasta", Left = 22, Top = 24, AutoSize = true }, until,
+                new Label { Text = "Accion", Left = 22, Top = 82, AutoSize = true }, mode, remove, save]);
+            DialogResult result = form.ShowDialog();
+            if (result == DialogResult.Retry) return (DateTimeOffset.Now, true, true);
+            return result == DialogResult.OK ? (new DateTimeOffset(until.Value), mode.SelectedIndex == 0, false) : null;
+        }
+
         private Control CrearVistaEmpleados()
         {
             var tarjeta = CrearTarjeta();
+            List<Empleado> visibles = empleadoService.ObtenerEmpleados().Where(x => grupoVisible == "Todos" || x.Grupo == grupoVisible).OrderBy(x => x.Grupo).ThenBy(x => x.Nombre).ToList();
             var tabla = CrearListaSimple(
                 new[] { "CARPETA", "EMPLEADO", "EQUIPO ASIGNADO", "SESIÓN", "ARES AGENT", "SISTEMA" },
-                empleadoService.ObtenerEmpleados().Select(e => new[] {
+                visibles.Select(e => new[] {
                     e.Grupo, e.Nombre, e.Computadora.Nombre,
                     e.Computadora.EstaLogueada ? "Iniciada" : "Sin iniciar",
                     "●  Verificando…", e.Computadora.SistemaOperativo }).ToList());
@@ -323,14 +387,14 @@ namespace AdministracionEmpleados
             var encabezado = CrearEncabezadoTarjeta("Directorio de empleados", "Carpetas y asignaciones activas dentro de la organización");
             var horarios = new Button { Text = "📅 Horarios", Dock = DockStyle.Right, Width = 130, FlatStyle = FlatStyle.Flat, BackColor = Color.FromArgb(37, 99, 235), ForeColor = Color.White };
             horarios.FlatAppearance.BorderSize = 0; horarios.Click += (_, _) => new ScheduleForm(discoveryService, empleadoService.ObtenerEmpleados()).ShowDialog(this);
-            encabezado.Controls.Add(horarios); tarjeta.Controls.Add(encabezado);
+            encabezado.Controls.Add(horarios); encabezado.Controls.Add(CrearSelectorCarpetas()); tarjeta.Controls.Add(encabezado);
             _ = ActualizarEstadoAgentesAsync(tabla);
             return tarjeta;
         }
 
         private async Task ActualizarEstadoAgentesAsync(DataGridView tabla)
         {
-            List<Empleado> empleados = empleadoService.ObtenerEmpleados();
+            List<Empleado> empleados = empleadoService.ObtenerEmpleados().Where(x => grupoVisible == "Todos" || x.Grupo == grupoVisible).OrderBy(x => x.Grupo).ThenBy(x => x.Nombre).ToList();
             if (tabla.IsDisposed || tabla.Disposing) return;
             await Task.CompletedTask;
             for (int i = 0; i < empleados.Count && i < tabla.Rows.Count; i++)
@@ -476,6 +540,14 @@ namespace AdministracionEmpleados
             Margin = new Padding(0)
         };
 
+        private ComboBox CrearSelectorCarpetas()
+        {
+            var selector = new ComboBox { Dock = DockStyle.Right, Width = 125, DropDownStyle = ComboBoxStyle.DropDownList, Margin = new Padding(6, 18, 6, 18) };
+            selector.Items.AddRange(["Todos", "Grupo 1", "Grupo 2", "Grupo 3"]); selector.SelectedItem = grupoVisible;
+            selector.SelectedIndexChanged += (_, _) => { grupoVisible = selector.SelectedItem?.ToString() ?? "Todos"; if (botonActivo is not null) MostrarSeccion(botonActivo); };
+            return selector;
+        }
+
         private static Panel CrearEncabezadoTarjeta(string titulo, string detalle)
         {
             var panel = new Panel { Dock = DockStyle.Top, Height = 78, BackColor = Color.White, Padding = new Padding(22, 13, 10, 0) };
@@ -526,6 +598,13 @@ namespace AdministracionEmpleados
         private async void ActualizarEstadoConexion()
         {
             await BuscarEquiposAsync();
+        }
+
+        private void MostrarAlerta(string mensaje) => notificador.ShowBalloonTip(6000, "ARES", mensaje, ToolTipIcon.Info);
+
+        protected override void OnFormClosed(FormClosedEventArgs e)
+        {
+            notificador.Visible = false; notificador.Dispose(); base.OnFormClosed(e);
         }
     }
 }

@@ -4,7 +4,9 @@ using System.Net.Http.Json;
 namespace AdministracionEmpleados.Servicios;
 
 public sealed record AgenteDetectado(string Id, string Equipo, string Usuario, string DireccionIp,
-    string Sistema, bool Bloqueado, bool SolicitudDesbloqueo, DateTimeOffset? SolicitudUtc, string Grupo);
+    string Sistema, bool Bloqueado, bool SolicitudDesbloqueo, DateTimeOffset? SolicitudUtc, string Grupo,
+    string MotivoBloqueo, DateTimeOffset? ProximoCambioUtc, DateTimeOffset? ExcepcionHastaUtc,
+    bool ActualizacionDisponible, string Version, string UltimaVersion, bool HorarioPendiente);
 
 public sealed class AgenteDiscoveryService
 {
@@ -27,7 +29,8 @@ public sealed class AgenteDiscoveryService
             .Select(a => new AgenteDetectado(a.Id,
                 string.IsNullOrWhiteSpace(a.NombrePersonalizado) ? a.Equipo : a.NombrePersonalizado,
                 a.Usuario, "Remoto", a.Sistema,
-                a.BloqueadoAdministrativamente, a.SolicitudDesbloqueoPendiente, a.SolicitudDesbloqueoUtc, a.Grupo))
+                a.BloqueadoAdministrativamente, a.SolicitudDesbloqueoPendiente, a.SolicitudDesbloqueoUtc, a.Grupo,
+                a.MotivoBloqueo, a.ProximoCambioUtc, a.ExcepcionHastaUtc, a.ActualizacionDisponible, a.Version, a.UltimaVersion, a.HorarioPendienteSincronizar))
             .ToList();
     }
     public async Task EstablecerGrupoAsync(string agentId, string grupo, CancellationToken cancelacion = default)
@@ -49,6 +52,62 @@ public sealed class AgenteDiscoveryService
         using HttpClient cliente = CrearCliente();
         using HttpResponseMessage respuesta = await cliente.PutAsJsonAsync($"{AresSettings.Cargar().ServerUrl.TrimEnd('/')}/api/schedule", horarios, cancelacion);
         respuesta.EnsureSuccessStatusCode();
+    }
+
+    public async Task EstablecerExcepcionAsync(string agentId, DateTimeOffset hastaUtc, bool permitir, CancellationToken cancelacion = default)
+    {
+        using HttpClient cliente = CrearCliente();
+        using HttpResponseMessage respuesta = await cliente.PutAsJsonAsync($"{AresSettings.Cargar().ServerUrl.TrimEnd('/')}/api/agents/{agentId}/override",
+            new TemporaryOverrideRequest { HastaUtc = hastaUtc, PermitirUso = permitir, Motivo = "Cambio de ultimo momento desde el panel" }, cancelacion);
+        respuesta.EnsureSuccessStatusCode();
+    }
+
+    public async Task QuitarExcepcionAsync(string agentId, CancellationToken cancelacion = default)
+    {
+        using HttpClient cliente = CrearCliente();
+        using HttpResponseMessage respuesta = await cliente.DeleteAsync($"{AresSettings.Cargar().ServerUrl.TrimEnd('/')}/api/agents/{agentId}/override", cancelacion);
+        respuesta.EnsureSuccessStatusCode();
+    }
+
+    public async Task SolicitarActualizacionAsync(string agentId, CancellationToken cancelacion = default)
+    {
+        using HttpClient cliente = CrearCliente();
+        using HttpResponseMessage respuesta = await cliente.PostAsync($"{AresSettings.Cargar().ServerUrl.TrimEnd('/')}/api/agents/{agentId}/update", null, cancelacion);
+        respuesta.EnsureSuccessStatusCode();
+    }
+
+    public async Task CargarPaqueteActualizacionAsync(string path, string version, CancellationToken cancelacion = default)
+    {
+        AresSettings settings = AresSettings.Cargar(); using var cliente = new HttpClient { Timeout = TimeSpan.FromMinutes(5) };
+        cliente.DefaultRequestHeaders.Add("X-ARES-Key", settings.ApiKey); using var content = new MultipartFormDataContent();
+        await using FileStream stream = File.OpenRead(path); content.Add(new StreamContent(stream), "file", Path.GetFileName(path)); content.Add(new StringContent(version), "version");
+        using HttpResponseMessage response = await cliente.PostAsync($"{settings.ServerUrl.TrimEnd('/')}/api/update-package", content, cancelacion); response.EnsureSuccessStatusCode();
+    }
+
+    public async Task<List<GroupPolicy>> ObtenerPoliticasGrupoAsync(CancellationToken cancelacion = default)
+    {
+        using HttpClient cliente = CrearCliente();
+        return await cliente.GetFromJsonAsync<List<GroupPolicy>>($"{AresSettings.Cargar().ServerUrl.TrimEnd('/')}/api/group-policies", cancelacion) ?? [];
+    }
+
+    public async Task GuardarPoliticasGrupoAsync(List<GroupPolicy> policies, CancellationToken cancelacion = default)
+    {
+        using HttpClient cliente = CrearCliente();
+        using HttpResponseMessage response = await cliente.PutAsJsonAsync($"{AresSettings.Cargar().ServerUrl.TrimEnd('/')}/api/group-policies", new GroupPoliciesRequest { Grupos = policies }, cancelacion);
+        response.EnsureSuccessStatusCode();
+    }
+
+    public async Task<List<ScheduleRevision>> ObtenerHistorialHorariosAsync(CancellationToken cancelacion = default)
+    {
+        using HttpClient cliente = CrearCliente();
+        return await cliente.GetFromJsonAsync<List<ScheduleRevision>>($"{AresSettings.Cargar().ServerUrl.TrimEnd('/')}/api/schedule/history", cancelacion) ?? [];
+    }
+
+    public async Task RestaurarHorarioAsync(string revisionId, CancellationToken cancelacion = default)
+    {
+        using HttpClient cliente = CrearCliente();
+        using HttpResponseMessage response = await cliente.PostAsJsonAsync($"{AresSettings.Cargar().ServerUrl.TrimEnd('/')}/api/schedule/rollback", new RollbackScheduleRequest { RevisionId = revisionId }, cancelacion);
+        response.EnsureSuccessStatusCode();
     }
 
     private static HttpClient CrearCliente()

@@ -33,9 +33,15 @@ internal sealed class ScheduleForm : Form
         var load = Button("Cargar publicados", async (_, _) => await LoadAsync());
         var publish = Button("Publicar cambios", async (_, _) => await PublishAsync(), Color.FromArgb(22, 163, 74));
         var add = Button("Agregar turno", (_, _) => grid.Rows.Add("", "", DateTime.Today.ToString("dd/MM/yyyy"), "06:00", "12:00"));
-        var top = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 54, Padding = new Padding(10), WrapContents = false };
+        var validate = Button("Validar / Simular", (_, _) => ValidateAndSimulate());
+        var calendar = Button("Calendario", (_, _) => ShowCalendar());
+        var copyWeek = Button("Copiar +7 dias", (_, _) => CopyWeek());
+        var margins = Button("Margenes", async (_, _) => await EditMarginsAsync());
+        var history = Button("Historial", async (_, _) => await ShowHistoryAsync());
+        var top = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 88, Padding = new Padding(10), WrapContents = true };
         top.Controls.AddRange([new Label { Text = "Mes:", AutoSize = true, Margin = new Padding(4, 8, 2, 0) }, month,
-            new Label { Text = "Año:", AutoSize = true, Margin = new Padding(8, 8, 2, 0) }, year, import, load, add, publish, status]);
+            new Label { Text = "Año:", AutoSize = true, Margin = new Padding(8, 8, 2, 0) }, year, import, load, add,
+            copyWeek, validate, calendar, margins, history, publish, status]);
         Controls.Add(grid); Controls.Add(top);
     }
 
@@ -80,28 +86,132 @@ internal sealed class ScheduleForm : Form
     {
         try
         {
-            var publication = new SchedulePublication { Mes = (int)month.Value, Anio = (int)year.Value };
-            foreach (DataGridViewRow row in grid.Rows.Cast<DataGridViewRow>().Where(r => !r.IsNewRow))
-            {
-                string employee = Convert.ToString(row.Cells["Empleado"].Value)?.Trim() ?? "";
-                string equipment = Convert.ToString(row.Cells["Equipo"].Value)?.Trim() ?? "";
-                Empleado? assigned = empleados.FirstOrDefault(e => e.Computadora.Nombre.Equals(equipment, StringComparison.OrdinalIgnoreCase));
-                if (assigned is null) throw new InvalidOperationException($"Asigná un equipo al turno de {employee}.");
-                if (!DateTime.TryParseExact(Convert.ToString(row.Cells["Fecha"].Value), "dd/MM/yyyy", CultureInfo.InvariantCulture, DateTimeStyles.None, out DateTime date) ||
-                    !TimeSpan.TryParse(Convert.ToString(row.Cells["Inicio"].Value), out TimeSpan start) || !TimeSpan.TryParse(Convert.ToString(row.Cells["Fin"].Value), out TimeSpan end))
-                    throw new InvalidOperationException($"Revisá la fecha y horas de {employee}.");
-                DateTime localStart = date.Date + start; DateTime localEnd = date.Date + end;
-                if (localEnd <= localStart) localEnd = localEnd.AddDays(1);
-                TimeZoneInfo zone = TimeZoneInfo.FindSystemTimeZoneById("America/Argentina/Buenos_Aires");
-                publication.Horarios.Add(new ScheduleInterval { AgentId = assigned.Computadora.AgentId, Empleado = employee,
-                    InicioUtc = new DateTimeOffset(TimeZoneInfo.ConvertTimeToUtc(DateTime.SpecifyKind(localStart, DateTimeKind.Unspecified), zone), TimeSpan.Zero),
-                    FinUtc = new DateTimeOffset(TimeZoneInfo.ConvertTimeToUtc(DateTime.SpecifyKind(localEnd, DateTimeKind.Unspecified), zone), TimeSpan.Zero) });
-            }
+            SchedulePublication publication = BuildPublication();
+            List<string> issues = Validate(publication);
+            if (issues.Count > 0) throw new InvalidOperationException(string.Join("\n", issues.Take(12)));
+            if (MessageBox.Show(BuildSimulation(publication), "Simulacion antes de publicar", MessageBoxButtons.OKCancel, MessageBoxIcon.Information) != DialogResult.OK) return;
             await api.PublicarHorariosAsync(publication); status.Text = $"Publicado: {DateTime.Now:dd/MM/yyyy HH:mm}";
             MessageBox.Show("Los horarios fueron publicados. Los agentes los recibirán en su próximo heartbeat.", "ARES", MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
         catch (Exception ex) { MessageBox.Show(ex.Message, "ARES", MessageBoxButtons.OK, MessageBoxIcon.Error); }
     }
+
+    private SchedulePublication BuildPublication()
+    {
+        var publication = new SchedulePublication { Mes = (int)month.Value, Anio = (int)year.Value };
+        int number = 0;
+        foreach (DataGridViewRow row in grid.Rows.Cast<DataGridViewRow>().Where(r => !r.IsNewRow))
+        {
+            number++;
+            string employee = Convert.ToString(row.Cells["Empleado"].Value)?.Trim() ?? "";
+            string equipment = Convert.ToString(row.Cells["Equipo"].Value)?.Trim() ?? "";
+            if (employee.Length == 0) throw new InvalidOperationException($"Fila {number}: falta el empleado.");
+            Empleado? assigned = empleados.FirstOrDefault(e => e.Computadora.Nombre.Equals(equipment, StringComparison.OrdinalIgnoreCase));
+            if (assigned is null) throw new InvalidOperationException($"Fila {number}: asigna un equipo a {employee}.");
+            if (!DateTime.TryParseExact(Convert.ToString(row.Cells["Fecha"].Value), "dd/MM/yyyy", CultureInfo.InvariantCulture, DateTimeStyles.None, out DateTime date) ||
+                !TimeSpan.TryParse(Convert.ToString(row.Cells["Inicio"].Value), out TimeSpan start) || !TimeSpan.TryParse(Convert.ToString(row.Cells["Fin"].Value), out TimeSpan end))
+                throw new InvalidOperationException($"Fila {number}: fecha u hora invalida para {employee}.");
+            DateTime localStart = date.Date + start; DateTime localEnd = date.Date + end; if (localEnd <= localStart) localEnd = localEnd.AddDays(1);
+            TimeZoneInfo zone = TimeZoneInfo.FindSystemTimeZoneById("America/Argentina/Buenos_Aires");
+            publication.Horarios.Add(new ScheduleInterval { AgentId = assigned.Computadora.AgentId, Empleado = employee,
+                InicioUtc = new DateTimeOffset(TimeZoneInfo.ConvertTimeToUtc(DateTime.SpecifyKind(localStart, DateTimeKind.Unspecified), zone), TimeSpan.Zero),
+                FinUtc = new DateTimeOffset(TimeZoneInfo.ConvertTimeToUtc(DateTime.SpecifyKind(localEnd, DateTimeKind.Unspecified), zone), TimeSpan.Zero) });
+        }
+        return publication;
+    }
+
+    private static List<string> Validate(SchedulePublication publication)
+    {
+        var issues = new List<string>();
+        foreach (var group in publication.Horarios.GroupBy(x => x.AgentId))
+        {
+            List<ScheduleInterval> ordered = group.OrderBy(x => x.InicioUtc).ToList();
+            for (int i = 1; i < ordered.Count; i++)
+                if (ordered[i].InicioUtc < ordered[i - 1].FinUtc)
+                    issues.Add($"Turnos superpuestos: {ordered[i - 1].Empleado} y {ordered[i].Empleado} ({ordered[i].InicioUtc.ToLocalTime():dd/MM HH:mm}).");
+            foreach (var duplicate in ordered.GroupBy(x => (x.Empleado, x.InicioUtc, x.FinUtc)).Where(x => x.Count() > 1))
+                issues.Add($"Turno duplicado: {duplicate.Key.Empleado}, {duplicate.Key.InicioUtc.ToLocalTime():dd/MM HH:mm}.");
+        }
+        if (publication.Horarios.Count == 0) issues.Add("No hay turnos para publicar.");
+        return issues;
+    }
+
+    private void ValidateAndSimulate()
+    {
+        try
+        {
+            SchedulePublication publication = BuildPublication(); List<string> issues = Validate(publication);
+            MessageBox.Show(issues.Count == 0 ? "Validacion correcta.\n\n" + BuildSimulation(publication) : string.Join("\n", issues.Take(15)),
+                "ARES - Validacion", MessageBoxButtons.OK, issues.Count == 0 ? MessageBoxIcon.Information : MessageBoxIcon.Warning);
+        }
+        catch (Exception ex) { MessageBox.Show(ex.Message, "ARES - Validacion", MessageBoxButtons.OK, MessageBoxIcon.Warning); }
+    }
+
+    private static string BuildSimulation(SchedulePublication publication)
+    {
+        DateTimeOffset now = DateTimeOffset.UtcNow;
+        int enabled = publication.Horarios.Select(x => x.AgentId).Distinct().Count(id => publication.Horarios.Any(x => x.AgentId == id && now >= x.InicioUtc && now < x.FinUtc));
+        int total = publication.Horarios.Select(x => x.AgentId).Distinct().Count();
+        return $"Turnos: {publication.Horarios.Count}\nEquipos incluidos: {total}\nSe desbloquearian ahora: {enabled}\nSe bloquearian ahora: {total - enabled}\n\nAceptar para publicar esta programacion.";
+    }
+
+    private void CopyWeek()
+    {
+        List<DataGridViewRow> source = grid.SelectedRows.Cast<DataGridViewRow>().Where(r => !r.IsNewRow).ToList();
+        if (source.Count == 0) source = grid.Rows.Cast<DataGridViewRow>().Where(r => !r.IsNewRow).ToList();
+        foreach (DataGridViewRow row in source)
+        {
+            if (!DateTime.TryParseExact(Convert.ToString(row.Cells["Fecha"].Value), "dd/MM/yyyy", CultureInfo.InvariantCulture, DateTimeStyles.None, out DateTime date)) continue;
+            grid.Rows.Add(Convert.ToString(row.Cells["Empleado"].Value) ?? "", Convert.ToString(row.Cells["Equipo"].Value) ?? "",
+                date.AddDays(7).ToString("dd/MM/yyyy"), Convert.ToString(row.Cells["Inicio"].Value) ?? "", Convert.ToString(row.Cells["Fin"].Value) ?? "");
+        }
+    }
+
+    private void ShowCalendar()
+    {
+        try
+        {
+            SchedulePublication publication = BuildPublication();
+            using var form = new Form { Text = "Calendario mensual ARES", Width = 1000, Height = 650, StartPosition = FormStartPosition.CenterParent };
+            var view = new DataGridView { Dock = DockStyle.Fill, ReadOnly = true, AllowUserToAddRows = false, AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill, RowHeadersVisible = false };
+            view.Columns.Add("Fecha", "FECHA"); view.Columns.Add("Turnos", "TURNOS PROGRAMADOS");
+            foreach (var day in publication.Horarios.GroupBy(x => x.InicioUtc.ToLocalTime().Date).OrderBy(x => x.Key))
+                view.Rows.Add(day.Key.ToString("dddd dd/MM", new CultureInfo("es-AR")), string.Join(" | ", day.OrderBy(x => x.InicioUtc).Select(x => $"{x.InicioUtc.ToLocalTime():HH:mm}-{x.FinUtc.ToLocalTime():HH:mm} {x.Empleado}")));
+            form.Controls.Add(view); form.ShowDialog(this);
+        }
+        catch (Exception ex) { MessageBox.Show(ex.Message, "ARES", MessageBoxButtons.OK, MessageBoxIcon.Warning); }
+    }
+
+    private async Task EditMarginsAsync()
+    {
+        List<GroupPolicy> policies = await api.ObtenerPoliticasGrupoAsync();
+        using var form = new Form { Text = "Margenes por grupo", Width = 520, Height = 300, StartPosition = FormStartPosition.CenterParent };
+        var table = new TableLayoutPanel { Dock = DockStyle.Top, Height = 190, ColumnCount = 3, RowCount = 4, Padding = new Padding(16) };
+        table.Controls.Add(new Label { Text = "Grupo" }, 0, 0); table.Controls.Add(new Label { Text = "Antes (min)" }, 1, 0); table.Controls.Add(new Label { Text = "Despues (min)" }, 2, 0);
+        var controls = new List<(GroupPolicy Policy, NumericUpDown Early, NumericUpDown Late)>();
+        for (int i = 0; i < policies.Count; i++)
+        {
+            GroupPolicy p = policies[i]; var early = new NumericUpDown { Minimum = 0, Maximum = 180, Value = p.MargenEntradaMinutos }; var late = new NumericUpDown { Minimum = 0, Maximum = 180, Value = p.MargenSalidaMinutos };
+            table.Controls.Add(new Label { Text = p.Grupo }, 0, i + 1); table.Controls.Add(early, 1, i + 1); table.Controls.Add(late, 2, i + 1); controls.Add((p, early, late));
+        }
+        var save = new Button { Text = "Guardar", Dock = DockStyle.Bottom, Height = 42, DialogResult = DialogResult.OK }; form.Controls.Add(table); form.Controls.Add(save);
+        if (form.ShowDialog(this) != DialogResult.OK) return;
+        foreach (var item in controls) { item.Policy.MargenEntradaMinutos = (int)item.Early.Value; item.Policy.MargenSalidaMinutos = (int)item.Late.Value; }
+        await api.GuardarPoliticasGrupoAsync(policies);
+    }
+
+    private async Task ShowHistoryAsync()
+    {
+        List<ScheduleRevision> history = await api.ObtenerHistorialHorariosAsync();
+        using var form = new Form { Text = "Historial de horarios", Width = 760, Height = 500, StartPosition = FormStartPosition.CenterParent };
+        var list = new ListBox { Dock = DockStyle.Fill };
+        foreach (ScheduleRevision revision in history) list.Items.Add(new RevisionItem(revision, $"{revision.FechaUtc.ToLocalTime():dd/MM/yyyy HH:mm} - {revision.Accion} - {revision.Estado.Horarios.Count} turnos"));
+        var restore = new Button { Text = "Restaurar seleccion", Dock = DockStyle.Bottom, Height = 44 };
+        restore.Click += async (_, _) => { if (list.SelectedItem is not RevisionItem item) return; await api.RestaurarHorarioAsync(item.Revision.Id); form.DialogResult = DialogResult.OK; form.Close(); };
+        form.Controls.Add(list); form.Controls.Add(restore); if (form.ShowDialog(this) == DialogResult.OK) await LoadAsync();
+    }
+
+    private sealed record RevisionItem(ScheduleRevision Revision, string Text) { public override string ToString() => Text; }
 
     private void AddRow(ScheduleInterval item)
     {

@@ -9,6 +9,9 @@ public class AgentHeartbeat
     public string Version { get; set; } = "1.0";
     public bool BloqueadoLocalmente { get; set; }
     public string RequestToken { get; set; } = "";
+    public string MotivoEstadoLocal { get; set; } = "";
+    public long HorarioVersionAplicada { get; set; }
+    public bool EsServicioSistema { get; set; }
 }
 
 public sealed class AgentStatus : AgentHeartbeat
@@ -20,6 +23,14 @@ public sealed class AgentStatus : AgentHeartbeat
     public bool SolicitudDesbloqueoPendiente { get; set; }
     public DateTimeOffset? SolicitudDesbloqueoUtc { get; set; }
     public string Grupo { get; set; } = "Grupo 1";
+    public DateTimeOffset? ExcepcionHastaUtc { get; set; }
+    public bool? ExcepcionPermitirUso { get; set; }
+    public string MotivoBloqueo { get; set; } = "Sin bloqueo";
+    public DateTimeOffset? ProximoCambioUtc { get; set; }
+    public bool ActualizacionDisponible { get; set; }
+    public string UltimaVersion { get; set; } = "";
+    public bool ActualizacionSolicitada { get; set; }
+    public bool HorarioPendienteSincronizar { get; set; }
 }
 
 public sealed class RenameAgentRequest
@@ -34,6 +45,13 @@ public sealed class HeartbeatResponse
     public bool BloqueadoAdministrativamente { get; set; }
     public long HorarioVersion { get; set; }
     public List<ScheduleInterval> Horarios { get; set; } = [];
+    public DateTimeOffset? ExcepcionHastaUtc { get; set; }
+    public bool? ExcepcionPermitirUso { get; set; }
+    public int MargenEntradaMinutos { get; set; }
+    public int MargenSalidaMinutos { get; set; }
+    public string UltimaVersion { get; set; } = "";
+    public string UrlActualizacion { get; set; } = "";
+    public bool ActualizarAhora { get; set; }
 }
 
 public sealed class RestrictionRequest
@@ -44,6 +62,25 @@ public sealed class RestrictionRequest
 public sealed class GroupRequest
 {
     public string Grupo { get; set; } = "Grupo 1";
+}
+
+public sealed class TemporaryOverrideRequest
+{
+    public bool PermitirUso { get; set; } = true;
+    public DateTimeOffset HastaUtc { get; set; }
+    public string Motivo { get; set; } = "Excepcion temporal";
+}
+
+public sealed class GroupPolicy
+{
+    public string Grupo { get; set; } = "Grupo 1";
+    public int MargenEntradaMinutos { get; set; }
+    public int MargenSalidaMinutos { get; set; }
+}
+
+public sealed class GroupPoliciesRequest
+{
+    public List<GroupPolicy> Grupos { get; set; } = [];
 }
 
 public sealed class ScheduleInterval
@@ -67,6 +104,19 @@ public sealed class ScheduleState : SchedulePublication
 {
     public long Version { get; set; }
     public DateTimeOffset PublicadoUtc { get; set; }
+}
+
+public sealed class ScheduleRevision
+{
+    public string Id { get; set; } = Guid.NewGuid().ToString("N");
+    public DateTimeOffset FechaUtc { get; set; }
+    public string Accion { get; set; } = "Publicacion";
+    public ScheduleState Estado { get; set; } = new();
+}
+
+public sealed class RollbackScheduleRequest
+{
+    public string RevisionId { get; set; } = "";
 }
 
 public sealed class AgentAuditEvent

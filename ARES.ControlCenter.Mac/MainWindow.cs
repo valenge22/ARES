@@ -28,6 +28,7 @@ public sealed class MainWindow : Window
         nav.Children.Add(new TextBlock { Text = "🛡  ARES", FontSize = 25, FontWeight = FontWeight.Bold, Foreground = Brushes.White, Margin = new Thickness(4, 8, 4, 25) });
         nav.Children.Add(NavButton("💻  Equipos", () => ShowAgentsAsync()));
         nav.Children.Add(NavButton("📋  Registros", ShowAuditAsync));
+        nav.Children.Add(NavButton("📅  Horarios", ShowScheduleAsync));
         nav.Children.Add(NavButton("⚙  Configuración", ShowSettingsAsync));
 
         var refresh = new Button { Content = "↻ Actualizar", Padding = new Thickness(18, 9), Background = Brush.Parse("#2563EB"), Foreground = Brushes.White };
@@ -84,12 +85,19 @@ public sealed class MainWindow : Window
         string displayName = string.IsNullOrWhiteSpace(agent.NombrePersonalizado) ? agent.Equipo : agent.NombrePersonalizado;
         details.Children.Add(new TextBlock { Text = displayName, FontSize = 17, FontWeight = FontWeight.Bold });
         details.Children.Add(new TextBlock { Text = $"{agent.Usuario} · {agent.Sistema}", Foreground = Brush.Parse("#64748B") });
+        details.Children.Add(new TextBlock { Text = $"{agent.Grupo} · {agent.MotivoBloqueo}" + (agent.ProximoCambioUtc.HasValue ? $" · Próximo: {agent.ProximoCambioUtc.Value.ToLocalTime():dd/MM HH:mm}" : ""), Foreground = Brush.Parse("#475569") });
         if (agent.SolicitudDesbloqueoPendiente) details.Children.Add(new TextBlock { Text = "🔔 Solicitud de desbloqueo pendiente", Foreground = Brush.Parse("#EA580C"), FontWeight = FontWeight.Bold });
         var button = new Button { Content = agent.BloqueadoAdministrativamente ? "Desbloquear" : "Bloquear", Background = Brush.Parse(agent.BloqueadoAdministrativamente ? "#16A34A" : "#DC2626"), Foreground = Brushes.White, Padding = new Thickness(16, 9) };
         var rename = new Button { Content = "Cambiar nombre", Padding = new Thickness(12, 7) };
+        var group = new Button { Content = "Mover de grupo", Padding = new Thickness(12, 7) };
+        group.Click += async (_, _) => { string next = agent.Grupo == "Grupo 1" ? "Grupo 2" : agent.Grupo == "Grupo 2" ? "Grupo 3" : "Grupo 1"; await api.SetGroupAsync(agent.Id, next); await ShowAgentsAsync(); };
+        var exception = new Button { Content = "Permitir 2 horas", Padding = new Thickness(12, 7) };
+        exception.Click += async (_, _) => { await api.OverrideAsync(agent.Id, DateTimeOffset.UtcNow.AddHours(2)); await ShowAgentsAsync(); };
+        var update = new Button { Content = agent.ActualizacionDisponible ? $"Actualizar a {agent.UltimaVersion}" : $"v{agent.Version}", Padding = new Thickness(12, 7), IsEnabled = agent.ActualizacionDisponible };
+        update.Click += async (_, _) => { await api.UpdateAgentAsync(agent.Id); status.Text = "Actualización solicitada."; };
         rename.Click += async (_, _) => await RenameAsync(agent, displayName);
         button.Click += async (_, _) => { button.IsEnabled = false; try { await api.RestrictAsync(agent.Id, !agent.BloqueadoAdministrativamente); await ShowAgentsAsync(); } catch (Exception ex) { status.Text = $"Error: {ex.Message}"; } finally { button.IsEnabled = true; } };
-        var actions = new StackPanel { Spacing = 8, HorizontalAlignment = HorizontalAlignment.Right, Children = { state, rename, button } };
+        var actions = new StackPanel { Spacing = 8, HorizontalAlignment = HorizontalAlignment.Right, Children = { state, group, exception, update, rename, button } };
         var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto") }; grid.Children.Add(details); Grid.SetColumn(actions, 1); grid.Children.Add(actions);
         return new Border { Background = Brushes.White, CornerRadius = new CornerRadius(12), Padding = new Thickness(18), Child = grid };
     }
@@ -102,6 +110,20 @@ public sealed class MainWindow : Window
             title.Text = "Registros"; status.Text = "Actualizando…"; var events = await api.AuditAsync(); content.Children.Clear();
             foreach (var item in events.Take(500)) content.Children.Add(new Border { Background = Brushes.White, CornerRadius = new CornerRadius(9), Padding = new Thickness(14), Child = new TextBlock { Text = $"{item.FechaUtc.ToLocalTime():dd/MM/yyyy HH:mm:ss}  ·  {item.Equipo}\n{item.Tipo}: {item.Detalle}", TextWrapping = TextWrapping.Wrap } });
             status.Text = $"{events.Count} eventos recientes";
+        }
+        catch (Exception ex) { status.Text = $"Error: {ex.Message}"; }
+        finally { loading = false; }
+    }
+
+    private async Task ShowScheduleAsync()
+    {
+        if (loading) return; loading = true;
+        try
+        {
+            title.Text = "Horarios"; status.Text = "Actualizando…"; ScheduleState schedule = await api.ScheduleAsync(); content.Children.Clear();
+            foreach (var day in schedule.Horarios.GroupBy(x => x.InicioUtc.ToLocalTime().Date).OrderBy(x => x.Key))
+                content.Children.Add(new Border { Background = Brushes.White, CornerRadius = new CornerRadius(9), Padding = new Thickness(14), Child = new TextBlock { Text = $"{day.Key:dddd dd/MM}\n" + string.Join("\n", day.OrderBy(x => x.InicioUtc).Select(x => $"{x.InicioUtc.ToLocalTime():HH:mm}-{x.FinUtc.ToLocalTime():HH:mm}  {x.Empleado}")) } });
+            status.Text = $"{schedule.Horarios.Count} turnos · versión {schedule.PublicadoUtc.ToLocalTime():dd/MM HH:mm}";
         }
         catch (Exception ex) { status.Text = $"Error: {ex.Message}"; }
         finally { loading = false; }

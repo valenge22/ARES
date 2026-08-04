@@ -59,6 +59,12 @@ namespace AdministracionEmpleados.Servicios
                 empleado.Computadora.EstaBloqueada = agente.Bloqueado;
                 empleado.Computadora.SolicitudDesbloqueoPendiente = agente.SolicitudDesbloqueo;
                 empleado.Computadora.SolicitudDesbloqueoUtc = agente.SolicitudUtc;
+                empleado.Computadora.MotivoBloqueo = agente.MotivoBloqueo;
+                empleado.Computadora.ProximoCambioUtc = agente.ProximoCambioUtc;
+                empleado.Computadora.ExcepcionHastaUtc = agente.ExcepcionHastaUtc;
+                empleado.Computadora.ActualizacionDisponible = agente.ActualizacionDisponible;
+                empleado.Computadora.Version = agente.Version;
+                empleado.Computadora.UltimaVersion = agente.UltimaVersion;
             }
         }
     }

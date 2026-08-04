@@ -20,6 +20,7 @@ namespace AdministracionEmpleados
         public MainForm()
         {
             InitializeComponent();
+            Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath) ?? SystemIcons.Shield;
 
             secciones = new()
             {

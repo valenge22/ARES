@@ -22,7 +22,7 @@ internal sealed class AgentApplicationContext : ApplicationContext
 
         icono = new NotifyIcon
         {
-            Icon = SystemIcons.Shield,
+            Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath) ?? SystemIcons.Shield,
             Text = "ARES Agent — Iniciando",
             ContextMenuStrip = menu,
             Visible = true

@@ -28,6 +28,7 @@ foreach ($ruta in @(
     $acceso.TargetPath = $ejecutable
     $acceso.WorkingDirectory = $destino
     $acceso.Description = 'ARES Centro de Control'
+    $acceso.IconLocation = "$ejecutable,0"
     $acceso.Save()
 }
 

@@ -40,9 +40,9 @@ var groupPolicies = File.Exists(policiesPath)
     : new List<GroupPolicy>();
 foreach (string group in new[] { "Grupo 1", "Grupo 2", "Grupo 3" })
     if (!groupPolicies.Any(p => p.Grupo == group)) groupPolicies.Add(new GroupPolicy { Grupo = group });
-string latestAgentVersion = builder.Configuration["ARES_LATEST_AGENT_VERSION"] ?? "1.6.0";
+string latestAgentVersion = builder.Configuration["ARES_LATEST_AGENT_VERSION"] ?? "1.6.1";
 string agentUpdateUrl = builder.Configuration["ARES_AGENT_UPDATE_URL"]
-    ?? "https://github.com/valenge22/ARES/releases/download/v1.6.0/ARES-Agent-Windows-x64.zip";
+    ?? "https://github.com/valenge22/ARES/releases/download/v1.6.1/ARES-Agent-Windows-x64.zip";
 if (File.Exists(updateVersionPath)) latestAgentVersion = File.ReadAllText(updateVersionPath).Trim();
 if (File.Exists(dataPath))
 {

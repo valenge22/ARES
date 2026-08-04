@@ -9,7 +9,8 @@
     <AssemblyName>ARES.ControlCenter</AssemblyName>
     <Product>ARES Centro de Control</Product>
     <Description>Consola administrativa remota de ARES.</Description>
-    <Version>1.2.0</Version>
+    <Version>1.2.1</Version>
+    <ApplicationIcon>..\Branding\ares.ico</ApplicationIcon>
   </PropertyGroup>
 
   <ItemGroup>

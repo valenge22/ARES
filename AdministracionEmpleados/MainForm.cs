@@ -627,10 +627,15 @@ namespace AdministracionEmpleados
                 }
                 usersPage.Controls.Add(users);
 
-                var inviteRoot = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 2, ColumnCount = 1, Padding = new Padding(15) };
-                inviteRoot.RowStyles.Add(new RowStyle(SizeType.Absolute, 55)); inviteRoot.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+                var inviteRoot = new Panel { Dock = DockStyle.Fill, Padding = new Padding(15) };
+                var inviteHeader = new Panel { Dock = DockStyle.Top, Height = 55 };
                 var inviteList = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.TopDown, WrapContents = false, AutoScroll = true, Padding = new Padding(0, 8, 0, 0) };
-                var createInvite = new Button { Text = "Crear código", Width = 130, Height = 38, Anchor = AnchorStyles.Left, BackColor = Color.FromArgb(37, 99, 235), ForeColor = Color.White, FlatStyle = FlatStyle.Flat };
+                var createInvite = new Button { Text = "Crear código", Width = 150, Height = 38, Location = new Point(0, 4), BackColor = Color.FromArgb(37, 99, 235), ForeColor = Color.White, FlatStyle = FlatStyle.Flat, Cursor = Cursors.Hand };
+                createInvite.FlatAppearance.BorderSize = 0;
+                inviteHeader.Controls.Add(createInvite);
+                inviteRoot.Controls.Add(inviteList);
+                inviteRoot.Controls.Add(inviteHeader);
+                invitationsPage.Controls.Add(inviteRoot);
                 createInvite.Click += async (_, _) =>
                 {
                     using var form = new Form { Text = "Nueva invitación", Width = 420, Height = 280, StartPosition = FormStartPosition.CenterParent, FormBorderStyle = FormBorderStyle.FixedDialog };
@@ -641,17 +646,27 @@ namespace AdministracionEmpleados
                     create.Click += async (_, _) => { CreatedInvitation result = await discoveryService.CrearInvitacionAsync((int)uses.Value, (int)hours.Value); Clipboard.SetText(result.Code); MessageBox.Show($"Código creado y copiado:\n\n{result.Code}\n\nSe mostrará completo solamente esta vez.", "ARES", MessageBoxButtons.OK, MessageBoxIcon.Information); form.Close(); await LoadAsync(); };
                     form.ShowDialog(dialog);
                 };
-                foreach (var invite in await discoveryService.ObtenerInvitacionesAsync())
+                try
                 {
-                    bool active = !invite.Revoked && invite.ExpiresAt > DateTimeOffset.UtcNow && invite.UsedCount < invite.MaxUses;
-                    var revoke = new Button { Text = "Revocar", Width = 90, Enabled = active };
-                    revoke.Click += async (_, _) => { await discoveryService.RevocarInvitacionAsync(invite.InvitationId); await LoadAsync(); };
-                    inviteList.Controls.Add(new FlowLayoutPanel { Width = 820, Height = 45, Controls = { new Label { Text = $"{invite.CodePrefix}-••••-•••• · {invite.UsedCount}/{invite.MaxUses} usos · vence {invite.ExpiresAt.ToLocalTime():dd/MM/yyyy HH:mm} · {(active ? "Activo" : "Inactivo")}", Width = 680, Height = 35 }, revoke } });
+                    foreach (var invite in await discoveryService.ObtenerInvitacionesAsync())
+                    {
+                        bool active = !invite.Revoked && invite.ExpiresAt > DateTimeOffset.UtcNow && invite.UsedCount < invite.MaxUses;
+                        var revoke = new Button { Text = "Revocar", Width = 90, Enabled = active };
+                        revoke.Click += async (_, _) => { await discoveryService.RevocarInvitacionAsync(invite.InvitationId); await LoadAsync(); };
+                        inviteList.Controls.Add(new FlowLayoutPanel { Width = 820, Height = 45, Controls = { new Label { Text = $"{invite.CodePrefix}-••••-•••• · {invite.UsedCount}/{invite.MaxUses} usos · vence {invite.ExpiresAt.ToLocalTime():dd/MM/yyyy HH:mm} · {(active ? "Activo" : "Inactivo")}", Width = 680, Height = 35 }, revoke } });
+                    }
                 }
-                inviteRoot.Controls.Add(createInvite, 0, 0); inviteRoot.Controls.Add(inviteList, 0, 1); invitationsPage.Controls.Add(inviteRoot);
+                catch (Exception ex)
+                {
+                    inviteList.Controls.Add(new Label { AutoSize = true, ForeColor = Color.FromArgb(220, 38, 38), Text = $"No se pudo cargar el listado: {ex.Message}" });
+                }
             }
-            try { await LoadAsync(); dialog.ShowDialog(this); }
-            catch (Exception ex) { MessageBox.Show(ex.Message, "ARES", MessageBoxButtons.OK, MessageBoxIcon.Error); }
+            dialog.Shown += async (_, _) =>
+            {
+                try { await LoadAsync(); }
+                catch (Exception ex) { MessageBox.Show(ex.Message, "ARES", MessageBoxButtons.OK, MessageBoxIcon.Error); }
+            };
+            dialog.ShowDialog(this);
         }
 
         private static Panel CrearTarjeta() => new()

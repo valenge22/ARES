@@ -25,7 +25,7 @@ if "%ARES_KEY%"=="" (
     exit /b 1
 )
 
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0Instalar-ARES-Agent.ps1" -ServerUrl "https://ares-3bic.onrender.com" -ApiKey "%ARES_KEY%" -LogPath "%ARES_LOG%"
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0Instalar-ARES-Agent.ps1" -ServerUrl "https://ares-3bic.onrender.com" -ApiKey "%ARES_KEY%" -InstallerAdminUser "%USERNAME%" -ProvisionStandardUser -LogPath "%ARES_LOG%"
 if errorlevel 1 (
     echo.
     echo La instalacion no pudo completarse.

@@ -1,7 +1,9 @@
 param(
     [string]$ServerUrl = 'https://ares-3bic.onrender.com',
     [string]$ApiKey = 'CAMBIAR-ESTA-CLAVE',
-    [string]$ManagedUser = $env:USERNAME,
+    [string]$ManagedUser = '',
+    [string]$InstallerAdminUser = $env:USERNAME,
+    [switch]$ProvisionStandardUser,
     [string]$LogPath = (Join-Path $env:TEMP 'ARES-Agent-Install.log')
 )
 
@@ -41,21 +43,81 @@ if (-not (Test-Path (Join-Path $origen 'ARES.Agent.exe'))) {
 
 $principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
 if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
-    $procesoElevado = Start-Process powershell.exe -Verb RunAs -Wait -PassThru -ArgumentList @(
+    $argumentosElevados = @(
         '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', ('"' + $PSCommandPath + '"'),
         '-ServerUrl', ('"' + $ServerUrl + '"'), '-ApiKey', ('"' + $ApiKey + '"'),
         '-ManagedUser', ('"' + $ManagedUser + '"'),
+        '-InstallerAdminUser', ('"' + $InstallerAdminUser + '"'),
         '-LogPath', ('"' + $LogPath + '"')
     )
+    if ($ProvisionStandardUser) { $argumentosElevados += '-ProvisionStandardUser' }
+    $procesoElevado = Start-Process powershell.exe -Verb RunAs -Wait -PassThru -ArgumentList $argumentosElevados
     exit $procesoElevado.ExitCode
 }
 
-$usuarioAdministrado = $ManagedUser
+function Read-ConfirmedPassword([string]$Prompt) {
+    $primera = Read-Host $Prompt -AsSecureString
+    $segunda = Read-Host 'Repeti la contrasena para confirmar' -AsSecureString
+    $texto1 = [PSCredential]::new('ARES', $primera).GetNetworkCredential().Password
+    $texto2 = [PSCredential]::new('ARES', $segunda).GetNetworkCredential().Password
+    if ([string]::IsNullOrWhiteSpace($texto1)) { throw 'La contrasena no puede estar vacia.' }
+    if ($texto1 -cne $texto2) { throw 'Las contrasenas ingresadas no coinciden.' }
+    $texto1 = $null
+    $texto2 = $null
+    return $primera
+}
+
+$usuarioAdministrado = $ManagedUser.Trim()
+if ($ProvisionStandardUser) {
+    $cuentaAdmin = Get-LocalUser -Name $InstallerAdminUser -ErrorAction SilentlyContinue
+    if (-not $cuentaAdmin) {
+        throw "La cuenta '$InstallerAdminUser' no es local. Ejecuta el instalador desde la cuenta administradora local que queres conservar."
+    }
+    $esAdmin = Get-LocalGroupMember -SID 'S-1-5-32-544' -ErrorAction Stop |
+        Where-Object { $_.SID -eq $cuentaAdmin.SID }
+    if (-not $esAdmin) { throw "La cuenta '$InstallerAdminUser' no pertenece al grupo Administradores." }
+
+    if ([string]::IsNullOrWhiteSpace($usuarioAdministrado)) {
+        $usuarioAdministrado = (Read-Host 'Nombre para la nueva cuenta del empleado (ejemplo: Empleado)').Trim()
+    }
+    if ($usuarioAdministrado -notmatch '^[^\\/\[\]:;|=,+*?<>@"]{1,20}$' -or $usuarioAdministrado.EndsWith('.')) {
+        throw 'El nombre de la cuenta del empleado no es valido o supera los 20 caracteres.'
+    }
+    if ($usuarioAdministrado -ieq $InstallerAdminUser) {
+        throw 'La cuenta del empleado debe ser diferente de la cuenta administradora.'
+    }
+
+    $cuentaEmpleado = Get-LocalUser -Name $usuarioAdministrado -ErrorAction SilentlyContinue
+    if (-not $cuentaEmpleado) {
+        Write-Host "Creando la cuenta estandar '$usuarioAdministrado'..."
+        $claveEmpleado = Read-ConfirmedPassword 'Contrasena inicial para el empleado'
+        $cuentaEmpleado = New-LocalUser -Name $usuarioAdministrado -Password $claveEmpleado `
+            -FullName $usuarioAdministrado -Description 'Cuenta estandar administrada por ARES' `
+            -AccountNeverExpires -UserMayNotChangePassword:$false
+        $grupoUsuarios = Get-LocalGroup -SID 'S-1-5-32-545'
+        Add-LocalGroupMember -Group $grupoUsuarios -Member $cuentaEmpleado -ErrorAction SilentlyContinue
+        $claveEmpleado.Dispose()
+    } else {
+        Write-Host "La cuenta '$usuarioAdministrado' ya existe; se conservara su contrasena actual."
+        Enable-LocalUser -Name $usuarioAdministrado
+    }
+
+    $empleadoEsAdmin = Get-LocalGroupMember -SID 'S-1-5-32-544' -ErrorAction Stop |
+        Where-Object { $_.SID -eq $cuentaEmpleado.SID }
+    if ($empleadoEsAdmin) {
+        throw "La cuenta '$usuarioAdministrado' ya existe pero es administradora. No se modifico la contrasena de '$InstallerAdminUser'."
+    }
+
+    $claveAdmin = Read-ConfirmedPassword "Nueva contrasena privada para el administrador '$InstallerAdminUser'"
+    Set-LocalUser -Name $InstallerAdminUser -Password $claveAdmin
+    $claveAdmin.Dispose()
+    Write-Host 'Cuenta estandar creada y cuenta administradora protegida.'
+}
 if ([string]::IsNullOrWhiteSpace($usuarioAdministrado)) {
     throw 'No se pudo identificar la cuenta del empleado.'
 }
 $miembroAdministradores = Get-LocalGroupMember -SID 'S-1-5-32-544' -ErrorAction Stop |
-    Where-Object { $_.Name -ieq "$env:COMPUTERNAME\$usuarioAdministrado" }
+    Where-Object { $_.SID -eq (Get-LocalUser -Name $usuarioAdministrado -ErrorAction Stop).SID }
 if ($miembroAdministradores) {
     throw "La cuenta '$usuarioAdministrado' es administradora. Por seguridad ARES no puede bloquearla. Creá una cuenta estándar para el empleado y ejecutá el instalador desde esa sesión."
 }
@@ -101,10 +163,11 @@ Register-ScheduledTask -TaskName $nombreTareaServicio -Action $accionServicio -T
     -Description 'Mantiene la conexion remota de ARES y aplica el bloqueo nativo.' -Force | Out-Null
 # El instalador está elevado y Start-Process abriría el agente en la sesión del
 # administrador. La tarea lo inicia con la identidad y la sesión del empleado.
-Start-ScheduledTask -TaskName $nombreTarea
-Start-Sleep -Seconds 2
-if ((Get-ScheduledTask -TaskName $nombreTarea).State -ne 'Running') {
-    throw "No se pudo iniciar ARES Agent en la sesión de '$usuarioAdministrado'. Verificá que esa cuenta esté desbloqueada y tenga una sesión iniciada."
+try {
+    Start-ScheduledTask -TaskName $nombreTarea -ErrorAction Stop
+    Start-Sleep -Seconds 2
+} catch {
+    Write-Host "ARES Agent visible se iniciara cuando '$usuarioAdministrado' ingrese a Windows."
 }
 Start-ScheduledTask -TaskName $nombreTareaServicio
 $fondoGenerado = Join-Path $env:ProgramData 'ARES\lockscreen.png'

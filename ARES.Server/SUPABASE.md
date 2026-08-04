@@ -1,0 +1,20 @@
+# Configurar Supabase para ARES
+
+ARES sigue ejecutando su API en Render. Supabase se utiliza como PostgreSQL
+persistente; los agentes y paneles no se conectan directamente a Supabase.
+
+1. En Supabase, abrir **Connect** y copiar la cadena de conexión del pooler en
+   modo **Session**. Para Render conviene la dirección IPv4 del pooler.
+2. Reemplazar el marcador de contraseña por la contraseña de la base de datos.
+3. En Render, abrir el servicio de ARES y agregar un Secret/Environment Variable:
+
+   - Nombre: `SUPABASE_DB_CONNECTION`
+   - Valor: la cadena completa copiada desde Supabase
+
+4. Desplegar nuevamente el servicio.
+5. Consultar `/health`. Al iniciar, ARES crea automáticamente la tabla
+   `public.ares_state`.
+
+No guardar la cadena de conexión en `appsettings.json`, instaladores, capturas ni
+GitHub. Si la variable no está configurada, ARES conserva el almacenamiento JSON
+local para desarrollo.

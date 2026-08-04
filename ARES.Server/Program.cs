@@ -13,6 +13,8 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Services.Configure<FormOptions>(options => options.MultipartBodyLengthLimit = 100 * 1024 * 1024);
 builder.WebHost.ConfigureKestrel(options => options.Limits.MaxRequestBodySize = 110 * 1024 * 1024);
 var app = builder.Build();
+var persistence = new AresPersistence(builder.Configuration);
+await persistence.InitializeAsync();
 
 string apiKey = builder.Configuration["ARES_API_KEY"]
     ?? Environment.GetEnvironmentVariable("ARES_API_KEY")
@@ -36,34 +38,22 @@ var audit = new ConcurrentQueue<AgentAuditEvent>();
 var saveLock = new SemaphoreSlim(1, 1);
 var requestLimits = new ConcurrentDictionary<string, DateTimeOffset>(StringComparer.Ordinal);
 var controlSessions = new ConcurrentDictionary<string, ControlSessionStatus>(StringComparer.OrdinalIgnoreCase);
-if (File.Exists(controlSessionsPath))
-    foreach (ControlSessionStatus session in JsonSerializer.Deserialize<List<ControlSessionStatus>>(File.ReadAllText(controlSessionsPath)) ?? [])
+List<ControlSessionStatus> savedControlSessions = await LoadStateAsync("control-sessions", controlSessionsPath, new List<ControlSessionStatus>());
+foreach (ControlSessionStatus session in savedControlSessions)
         controlSessions[session.Id] = session;
-ScheduleState schedule = File.Exists(schedulePath)
-    ? JsonSerializer.Deserialize<ScheduleState>(File.ReadAllText(schedulePath)) ?? new()
-    : new();
-var scheduleHistory = File.Exists(historyPath)
-    ? JsonSerializer.Deserialize<List<ScheduleRevision>>(File.ReadAllText(historyPath)) ?? []
-    : new List<ScheduleRevision>();
-var groupPolicies = File.Exists(policiesPath)
-    ? JsonSerializer.Deserialize<List<GroupPolicy>>(File.ReadAllText(policiesPath)) ?? []
-    : new List<GroupPolicy>();
+ScheduleState schedule = await LoadStateAsync("schedule", schedulePath, new ScheduleState());
+var scheduleHistory = await LoadStateAsync("schedule-history", historyPath, new List<ScheduleRevision>());
+var groupPolicies = await LoadStateAsync("group-policies", policiesPath, new List<GroupPolicy>());
 foreach (string group in new[] { "Grupo 1", "Grupo 2", "Grupo 3" })
     if (!groupPolicies.Any(p => p.Grupo == group)) groupPolicies.Add(new GroupPolicy { Grupo = group });
 string latestAgentVersion = builder.Configuration["ARES_LATEST_AGENT_VERSION"] ?? "1.6.1";
 string agentUpdateUrl = builder.Configuration["ARES_AGENT_UPDATE_URL"]
     ?? "https://github.com/valenge22/ARES/releases/download/v1.6.1/ARES-Agent-Windows-x64.zip";
 if (File.Exists(updateVersionPath)) latestAgentVersion = File.ReadAllText(updateVersionPath).Trim();
-if (File.Exists(dataPath))
-{
-    foreach (AgentStatus agent in JsonSerializer.Deserialize<List<AgentStatus>>(File.ReadAllText(dataPath)) ?? [])
-        agents[agent.Id] = agent;
-}
-if (File.Exists(auditPath))
-{
-    foreach (AgentAuditEvent evento in JsonSerializer.Deserialize<List<AgentAuditEvent>>(File.ReadAllText(auditPath)) ?? [])
-        audit.Enqueue(evento);
-}
+foreach (AgentStatus agent in await LoadStateAsync("agents", dataPath, new List<AgentStatus>()))
+    agents[agent.Id] = agent;
+foreach (AgentAuditEvent evento in await LoadStateAsync("audit", auditPath, new List<AgentAuditEvent>()))
+    audit.Enqueue(evento);
 
 app.Use(async (context, next) =>
 {
@@ -78,7 +68,12 @@ app.Use(async (context, next) =>
     await next();
 });
 
-app.MapGet("/health", () => Results.Ok(new { service = "ARES Server", status = "ok" }));
+app.MapGet("/health", () => Results.Ok(new
+{
+    service = "ARES Server",
+    status = "ok",
+    storage = persistence.UsesDatabase ? "postgresql" : "json"
+}));
 
 app.MapPost("/api/control-sessions/heartbeat", async (ControlSessionHeartbeat heartbeat, HttpRequest httpRequest) =>
 {
@@ -248,7 +243,7 @@ app.MapPut("/api/group-policies", async (GroupPoliciesRequest request) =>
     if (request.Grupos.Any(x => x.MargenEntradaMinutos is < 0 or > 180 || x.MargenSalidaMinutos is < 0 or > 180))
         return Results.BadRequest(new { error = "Los margenes deben estar entre 0 y 180 minutos." });
     groupPolicies = request.Grupos.Where(x => new[] { "Grupo 1", "Grupo 2", "Grupo 3" }.Contains(x.Grupo)).ToList();
-    await File.WriteAllTextAsync(policiesPath, JsonSerializer.Serialize(groupPolicies, new JsonSerializerOptions { WriteIndented = true }));
+    await SaveStateAsync("group-policies", policiesPath, groupPolicies);
     await RegistrarEventoAsync("SERVER", "Servidor ARES", "POLITICAS_GRUPO_ACTUALIZADAS", "Se actualizaron los margenes de entrada y salida.");
     return Results.Ok(groupPolicies);
 });
@@ -534,10 +529,7 @@ async Task GuardarAuditoriaAsync()
     await saveLock.WaitAsync();
     try
     {
-        string temporal = auditPath + ".tmp";
-        await File.WriteAllTextAsync(temporal, JsonSerializer.Serialize(audit,
-            new JsonSerializerOptions { WriteIndented = true }));
-        File.Move(temporal, auditPath, true);
+        await SaveStateAsync("audit", auditPath, audit.ToArray());
     }
     finally { saveLock.Release(); }
 }
@@ -547,26 +539,47 @@ async Task GuardarAsync()
     await saveLock.WaitAsync();
     try
     {
-        string temporal = dataPath + ".tmp";
-        await File.WriteAllTextAsync(temporal, JsonSerializer.Serialize(agents.Values,
-            new JsonSerializerOptions { WriteIndented = true }));
-        File.Move(temporal, dataPath, true);
+        await SaveStateAsync("agents", dataPath, agents.Values.ToArray());
     }
     finally { saveLock.Release(); }
 }
 
 async Task GuardarHorariosAsync()
 {
-    var options = new JsonSerializerOptions { WriteIndented = true };
-    await File.WriteAllTextAsync(schedulePath, JsonSerializer.Serialize(schedule, options));
-    await File.WriteAllTextAsync(historyPath, JsonSerializer.Serialize(scheduleHistory, options));
+    await SaveStateAsync("schedule", schedulePath, schedule);
+    await SaveStateAsync("schedule-history", historyPath, scheduleHistory);
 }
 
 async Task GuardarSesionesPanelAsync()
 {
     await saveLock.WaitAsync();
-    try { await File.WriteAllTextAsync(controlSessionsPath, JsonSerializer.Serialize(controlSessions.Values, new JsonSerializerOptions { WriteIndented = true })); }
+    try { await SaveStateAsync("control-sessions", controlSessionsPath, controlSessions.Values.ToArray()); }
     finally { saveLock.Release(); }
+}
+
+async Task<T> LoadStateAsync<T>(string key, string legacyPath, T fallback)
+{
+    T? databaseValue = await persistence.LoadAsync<T>(key);
+    if (databaseValue is not null) return databaseValue;
+
+    T value = File.Exists(legacyPath)
+        ? JsonSerializer.Deserialize<T>(await File.ReadAllTextAsync(legacyPath)) ?? fallback
+        : fallback;
+    if (persistence.UsesDatabase) await persistence.SaveAsync(key, value);
+    return value;
+}
+
+async Task SaveStateAsync<T>(string key, string legacyPath, T value)
+{
+    if (persistence.UsesDatabase)
+    {
+        await persistence.SaveAsync(key, value);
+        return;
+    }
+
+    string temporal = legacyPath + ".tmp";
+    await File.WriteAllTextAsync(temporal, JsonSerializer.Serialize(value, new JsonSerializerOptions { WriteIndented = true }));
+    File.Move(temporal, legacyPath, true);
 }
 
 ScheduleState ClonarHorario(ScheduleState value) => JsonSerializer.Deserialize<ScheduleState>(JsonSerializer.Serialize(value)) ?? new();

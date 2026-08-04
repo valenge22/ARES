@@ -4,8 +4,11 @@
 #ifndef OutputDir
   #define OutputDir "..\..\distribucion"
 #endif
+#ifndef SetupUiSource
+  #define SetupUiSource "..\..\distribucion\ARES-Agent-Setup-UI"
+#endif
 #ifndef AppVersion
-  #define AppVersion "1.6.3"
+  #define AppVersion "1.6.4"
 #endif
 
 [Setup]
@@ -34,6 +37,7 @@ Name: "spanish"; MessagesFile: "compiler:Languages\Spanish.isl"
 
 [Files]
 Source: "{#PackageSource}\*"; DestDir: "{tmp}\ARES-Agent-Package"; Flags: ignoreversion recursesubdirs createallsubdirs deleteafterinstall
+Source: "{#SetupUiSource}\*"; DestDir: "{tmp}\ARES-Agent-Setup-UI"; Flags: ignoreversion recursesubdirs createallsubdirs deleteafterinstall
 
 [Code]
 procedure CurStepChanged(CurStep: TSetupStep);
@@ -45,10 +49,12 @@ begin
   begin
     PackageDir := ExpandConstant('{tmp}\ARES-Agent-Package');
     WizardForm.StatusLabel.Caption := 'Configurando las cuentas de Windows y ARES Agent...';
-    if not Exec(ExpandConstant('{cmd}'),
-      '/D /C ""' + PackageDir + '\INSTALAR.bat""', PackageDir,
-      SW_SHOW, ewWaitUntilTerminated, ResultCode) then
+    if not Exec(ExpandConstant('{tmp}\ARES-Agent-Setup-UI\ARES.Agent.Setup.exe'),
+      '--package "' + PackageDir + '"', PackageDir,
+      SW_SHOWNORMAL, ewWaitUntilTerminated, ResultCode) then
       RaiseException('No se pudo iniciar la configuracion de ARES Agent.');
+    if ResultCode = 2 then
+      Abort;
     if ResultCode <> 0 then
       RaiseException('ARES Agent no pudo instalarse. Revisa el error mostrado por el configurador.');
   end;

@@ -6,6 +6,7 @@ $salida = Join-Path $raiz 'distribucion\ARES-Agent-Windows-x64'
 $app = Join-Path $salida 'app'
 $zip = Join-Path $raiz 'distribucion\ARES-Agent-Windows-x64.zip'
 $setup = Join-Path $raiz 'distribucion\ARES-Agent-Setup.exe'
+$setupUi = Join-Path $raiz 'distribucion\ARES-Agent-Setup-UI'
 $proteccionAnterior = Join-Path $salida 'uninstall-protection.json'
 $contenidoProteccionAnterior = if (Test-Path $proteccionAnterior) {
     [IO.File]::ReadAllBytes($proteccionAnterior)
@@ -14,7 +15,9 @@ $contenidoProteccionAnterior = if (Test-Path $proteccionAnterior) {
 if (Test-Path $salida) { Remove-Item -LiteralPath $salida -Recurse -Force }
 if (Test-Path $zip) { Remove-Item -LiteralPath $zip -Force }
 if (Test-Path $setup) { Remove-Item -LiteralPath $setup -Force }
+if (Test-Path $setupUi) { Remove-Item -LiteralPath $setupUi -Recurse -Force }
 New-Item -ItemType Directory -Path $app -Force | Out-Null
+New-Item -ItemType Directory -Path $setupUi -Force | Out-Null
 
 dotnet publish (Join-Path $raiz 'ARES.Agent\ARES.Agent.csproj') `
     --configuration Release `
@@ -27,6 +30,15 @@ dotnet publish (Join-Path $raiz 'ARES.Agent\ARES.Agent.csproj') `
 if ($LASTEXITCODE -ne 0) {
     throw "No se pudo compilar ARES Agent. Código de salida: $LASTEXITCODE"
 }
+
+dotnet publish (Join-Path $raiz 'ARES.Agent.Setup\ARES.Agent.Setup.csproj') `
+    --configuration Release `
+    --runtime win-x64 `
+    --self-contained true `
+    -p:PublishSingleFile=true `
+    -p:IncludeNativeLibrariesForSelfExtract=true `
+    --output $setupUi
+if ($LASTEXITCODE -ne 0) { throw "No se pudo compilar la interfaz grafica del instalador. Codigo: $LASTEXITCODE" }
 
 Copy-Item (Join-Path $raiz 'ARES.Agent\Installer\*') $salida -Force
 
@@ -78,7 +90,7 @@ $iscc = $isccCandidates | Select-Object -First 1
 if (-not $iscc) { throw 'No se encontro Inno Setup 6 (ISCC.exe).' }
 
 $iss = Join-Path $raiz 'ARES.Agent\Installer\ARES-Agent.iss'
-& $iscc "/DPackageSource=$salida" "/DOutputDir=$(Join-Path $raiz 'distribucion')" '/DAppVersion=1.6.3' $iss
+& $iscc "/DPackageSource=$salida" "/DSetupUiSource=$setupUi" "/DOutputDir=$(Join-Path $raiz 'distribucion')" '/DAppVersion=1.6.4' $iss
 if ($LASTEXITCODE -ne 0 -or -not (Test-Path $setup)) { throw 'No se pudo generar el instalador EXE de ARES Agent.' }
 
 Write-Host "Paquete creado: $zip"

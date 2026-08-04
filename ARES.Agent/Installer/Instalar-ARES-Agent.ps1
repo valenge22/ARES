@@ -4,6 +4,7 @@ param(
     [string]$ManagedUser = '',
     [string]$InstallerAdminUser = $env:USERNAME,
     [switch]$ProvisionStandardUser,
+    [switch]$NonInteractiveProvisioning,
     [string]$LogPath = (Join-Path $env:TEMP 'ARES-Agent-Install.log')
 )
 
@@ -51,11 +52,26 @@ if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administra
         '-LogPath', ('"' + $LogPath + '"')
     )
     if ($ProvisionStandardUser) { $argumentosElevados += '-ProvisionStandardUser' }
+    if ($NonInteractiveProvisioning) { $argumentosElevados += '-NonInteractiveProvisioning' }
     $procesoElevado = Start-Process powershell.exe -Verb RunAs -Wait -PassThru -ArgumentList $argumentosElevados
     exit $procesoElevado.ExitCode
 }
 
-function Read-ConfirmedPassword([string]$Prompt) {
+if ($NonInteractiveProvisioning) {
+    $apiKeySegura = [Environment]::GetEnvironmentVariable('ARES_SETUP_API_KEY')
+    if ([string]::IsNullOrWhiteSpace($apiKeySegura)) { throw 'Falta la clave segura de ARES.' }
+    $ApiKey = $apiKeySegura
+    $apiKeySegura = $null
+    [Environment]::SetEnvironmentVariable('ARES_SETUP_API_KEY', $null, 'Process')
+}
+
+function Read-ConfirmedPassword([string]$Prompt, [string]$EnvironmentVariable = '') {
+    if ($NonInteractiveProvisioning) {
+        $texto = [Environment]::GetEnvironmentVariable($EnvironmentVariable)
+        if ([string]::IsNullOrWhiteSpace($texto)) { throw "Falta la credencial segura requerida: $EnvironmentVariable." }
+        try { return ConvertTo-SecureString $texto -AsPlainText -Force }
+        finally { $texto = $null; [Environment]::SetEnvironmentVariable($EnvironmentVariable, $null, 'Process') }
+    }
     $primera = Read-Host $Prompt -AsSecureString
     $segunda = Read-Host 'Repeti la contrasena para confirmar' -AsSecureString
     $texto1 = [PSCredential]::new('ARES', $primera).GetNetworkCredential().Password
@@ -90,7 +106,7 @@ if ($ProvisionStandardUser) {
     $cuentaEmpleado = Get-LocalUser -Name $usuarioAdministrado -ErrorAction SilentlyContinue
     if (-not $cuentaEmpleado) {
         Write-Host "Creando la cuenta estandar '$usuarioAdministrado'..."
-        $claveEmpleado = Read-ConfirmedPassword 'Contrasena inicial para el empleado'
+        $claveEmpleado = Read-ConfirmedPassword 'Contrasena inicial para el empleado' 'ARES_SETUP_EMPLOYEE_PASSWORD'
         $cuentaEmpleado = New-LocalUser -Name $usuarioAdministrado -Password $claveEmpleado `
             -FullName $usuarioAdministrado -Description 'Cuenta estandar administrada por ARES' `
             -AccountNeverExpires -UserMayNotChangePassword:$false
@@ -108,7 +124,7 @@ if ($ProvisionStandardUser) {
         throw "La cuenta '$usuarioAdministrado' ya existe pero es administradora. No se modifico la contrasena de '$InstallerAdminUser'."
     }
 
-    $claveAdmin = Read-ConfirmedPassword "Nueva contrasena privada para el administrador '$InstallerAdminUser'"
+    $claveAdmin = Read-ConfirmedPassword "Nueva contrasena privada para el administrador '$InstallerAdminUser'" 'ARES_SETUP_ADMIN_PASSWORD'
     Set-LocalUser -Name $InstallerAdminUser -Password $claveAdmin
     $claveAdmin.Dispose()
     Write-Host 'Cuenta estandar creada y cuenta administradora protegida.'
@@ -180,4 +196,6 @@ if (-not (Test-Path $fondoGenerado)) {
 Set-Content -LiteralPath $LogPath -Value "Instalación completada correctamente el $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')." -Encoding UTF8
 
 Add-Type -AssemblyName PresentationFramework
-[System.Windows.MessageBox]::Show('ARES Agent se instaló correctamente. El escudo aparecerá junto al reloj de Windows.', 'ARES Agent') | Out-Null
+if (-not $NonInteractiveProvisioning) {
+    [System.Windows.MessageBox]::Show('ARES Agent se instaló correctamente. El escudo aparecerá junto al reloj de Windows.', 'ARES Agent') | Out-Null
+}

@@ -8,8 +8,8 @@ showSecurity=async function(){
     $('mfaEnable').classList.toggle('hidden',!!active);
     $('mfaDisable').classList.toggle('hidden',!active);
   }catch(x){$('mfaStatus').textContent=`No se pudo consultar 2FA: ${x.message}`}
-  try{const s=await api('/api/account/sessions');$('sessions').innerHTML=s.map(x=>`<tr><td>${esc(x.clientName)}</td><td>${esc(x.ipAddress)}</td><td>${new Date(x.lastSeenAt).toLocaleString('es-AR')}</td><td>${x.revoked?'Cerrada':'Activa'}</td><td>${x.revoked?'—':`<button class="danger" onclick="closeSession('${x.sessionId}')">Cerrar</button>`}</td></tr>`).join('')}catch(x){$('sessions').innerHTML=`<tr><td colspan="5">${esc(x.message)}</td></tr>`}
-  try{const e=await api('/api/account/login-events');$('events').innerHTML=e.map(x=>`<tr><td>${esc(x.clientName)}</td><td>${esc(x.ipAddress)}</td><td>${x.successful?'Correcto':'Fallido'}</td><td>${new Date(x.occurredAt).toLocaleString('es-AR')}</td></tr>`).join('')}catch(x){$('events').innerHTML=`<tr><td colspan="4">${esc(x.message)}</td></tr>`}
+  try{const s=await api('/api/account/sessions'),rows=Array.isArray(s)?s:(s.$values||s.sessions||[]);$('sessions').innerHTML=rows.length?rows.map(x=>`<tr><td>${esc(x.clientName)}</td><td>${esc(x.ipAddress)}</td><td>${new Date(x.lastSeenAt).toLocaleString('es-AR')}</td><td>${x.revoked?'Cerrada':'Activa'}</td><td>${x.revoked?'—':`<button class="danger" onclick="closeSession('${x.sessionId}')">Cerrar</button>`}</td></tr>`).join(''):'<tr><td colspan="5">No hay sesiones registradas.</td></tr>'}catch(x){$('sessions').innerHTML=`<tr><td colspan="5">${esc(x.message)}</td></tr>`}
+  try{const e=await api('/api/account/login-events'),rows=Array.isArray(e)?e:(e.$values||e.events||[]);$('events').innerHTML=rows.length?rows.map(x=>`<tr><td>${esc(x.clientName)}</td><td>${esc(x.ipAddress)}</td><td>${x.successful?'Correcto':'Fallido'}</td><td>${new Date(x.occurredAt).toLocaleString('es-AR')}</td></tr>`).join(''):'<tr><td colspan="4">No hay accesos registrados.</td></tr>'}catch(x){$('events').innerHTML=`<tr><td colspan="4">${esc(x.message)}</td></tr>`}
 };
 
 beginMfa=async function(){

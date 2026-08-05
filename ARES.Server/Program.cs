@@ -171,7 +171,11 @@ app.MapGet("/health", () => Results.Ok(new
 app.MapGet("/", () => Results.Redirect("/portal"));
 app.MapGet("/portal", () => Results.File(Path.Combine(app.Environment.ContentRootPath, "wwwroot", "portal.html"), "text/html; charset=utf-8"));
 app.MapGet("/admin-ares", () => Results.File(Path.Combine(app.Environment.ContentRootPath, "wwwroot", "admin-ares.html"), "text/html; charset=utf-8"));
-app.MapGet("/admin-mfa.js", () => Results.File(Path.Combine(app.Environment.ContentRootPath, "wwwroot", "admin-mfa.js"), "application/javascript; charset=utf-8"));
+app.MapGet("/admin-mfa.js", (HttpContext context) =>
+{
+    context.Response.Headers.CacheControl = "no-store, no-cache, must-revalidate";
+    return Results.File(Path.Combine(app.Environment.ContentRootPath, "wwwroot", "admin-mfa.js"), "application/javascript; charset=utf-8");
+});
 
 app.MapPost("/api/auth/login", async (LoginRequest request, HttpContext context, CancellationToken cancellationToken) =>
 {

@@ -19,6 +19,8 @@ public sealed class MainWindow : Window
     private readonly TextBlock title = new() { Text = "Equipos", FontSize = 28, FontWeight = FontWeight.Bold };
     private readonly DispatcherTimer timer = new() { Interval = TimeSpan.FromSeconds(10) };
     private bool loading;
+    private static string DisplayRole(string role) => role switch { "Owner" => "Propietario", "Administrator" => "Administrador", "Operator" or "Supervisor" => "Operador", _ => "Solo lectura" };
+    private static string ApiRole(string role) => role == "Administrador" ? "Administrator" : "Operator";
 
     public MainWindow()
     {
@@ -37,7 +39,7 @@ public sealed class MainWindow : Window
 
         var refresh = new Button { Content = "↻ Actualizar", Padding = new Thickness(18, 9), Background = Brush.Parse("#2563EB"), Foreground = Brushes.White };
         refresh.Click += async (_, _) => await ShowAgentsAsync();
-        var clear = new Button { Content = "Borrar lista", Padding = new Thickness(18, 9), Background = Brush.Parse("#DC2626"), Foreground = Brushes.White };
+        var clear = new Button { Content = "Borrar lista", Padding = new Thickness(18, 9), Background = Brush.Parse("#DC2626"), Foreground = Brushes.White, IsVisible = MacControlAuth.Client.User?.Role is "Owner" or "Administrator" };
         clear.Click += async (_, _) =>
         {
             if (!await ConfirmClearAsync()) return;
@@ -245,11 +247,11 @@ public sealed class MainWindow : Window
             createInvitation.Click += async (_, _) =>
             {
                 var uses = new NumericUpDown { Minimum = 1, Maximum = 1000, Value = 1 }; var hours = new NumericUpDown { Minimum = 1, Maximum = 720, Value = 48 };
-                var role = new ComboBox { ItemsSource = new[] { "Administrator", "Supervisor", "Viewer" }, SelectedItem = "Viewer" };
+                var role = new ComboBox { ItemsSource = new[] { "Administrador", "Operador" }, SelectedItem = "Operador" };
                 var create = new Button { Content = "Generar código" }; var message = new TextBlock { TextWrapping = TextWrapping.Wrap };
                 var form = new Window { Title = "Nueva invitación", Width = 430, Height = 400, WindowStartupLocation = WindowStartupLocation.CenterOwner,
                     Content = new StackPanel { Margin = new Thickness(26), Spacing = 10, Children = { new TextBlock { Text = "Rol del invitado" }, role, new TextBlock { Text = "Cantidad máxima de usos" }, uses, new TextBlock { Text = "Duración en horas" }, hours, create, message } } };
-                create.Click += async (_, _) => { CreatedInvitation result = await api.CreateInvitationAsync((int)(uses.Value ?? 1), (int)(hours.Value ?? 48), role.SelectedItem?.ToString() ?? "Viewer"); if (TopLevel.GetTopLevel(this)?.Clipboard is { } clipboard) await clipboard.SetTextAsync(result.Code); message.Text = $"{result.Code}\nCopiado al portapapeles. Se mostrará completo solamente esta vez."; await LoadAsync(); };
+                create.Click += async (_, _) => { CreatedInvitation result = await api.CreateInvitationAsync((int)(uses.Value ?? 1), (int)(hours.Value ?? 48), ApiRole(role.SelectedItem?.ToString() ?? "Operador")); if (TopLevel.GetTopLevel(this)?.Clipboard is { } clipboard) await clipboard.SetTextAsync(result.Code); message.Text = $"{result.Code}\nCopiado al portapapeles. Se mostrará completo solamente esta vez."; await LoadAsync(); };
                 await form.ShowDialog(dialog);
             };
             list.Children.Add(createInvitation);
@@ -261,20 +263,20 @@ public sealed class MainWindow : Window
             }
             foreach (var item in (await api.RegistrationsAsync()).Where(x => x.Status == "Pending"))
             {
-                var role = new ComboBox { Width = 140, ItemsSource = new[] { "Administrator", "Supervisor", "Viewer" }, SelectedIndex = 1 };
+                var role = new ComboBox { Width = 140, ItemsSource = new[] { "Administrador", "Operador" }, SelectedItem = "Operador" };
                 var approve = new Button { Content = "Aprobar" }; var reject = new Button { Content = "Rechazar" };
-                approve.Click += async (_, _) => { await api.ApproveAsync(item.UserId, role.SelectedItem?.ToString() ?? "Supervisor"); await LoadAsync(); };
+                approve.Click += async (_, _) => { await api.ApproveAsync(item.UserId, ApiRole(role.SelectedItem?.ToString() ?? "Operador")); await LoadAsync(); };
                 reject.Click += async (_, _) => { await api.RejectAsync(item.UserId); await LoadAsync(); };
                 list.Children.Add(new Border { Background = Brushes.White, Padding = new Thickness(12), Child = new StackPanel { Spacing = 6, Children = { new TextBlock { Text = $"PENDIENTE · {item.DisplayName} · {item.Email}", FontWeight = FontWeight.Bold }, new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Children = { role, approve, reject } } } } });
             }
             foreach (var item in await api.AdminUsersAsync())
             {
-                var role = new ComboBox { Width = 140, ItemsSource = new[] { "Administrator", "Supervisor", "Viewer" }, SelectedItem = item.Role, IsEnabled = item.Role != "Owner" };
+                var role = new ComboBox { Width = 140, ItemsSource = new[] { "Administrador", "Operador" }, SelectedItem = DisplayRole(item.Role), IsEnabled = item.Role != "Owner" };
                 var toggle = new Button { Content = item.Enabled ? "Suspender" : "Habilitar", IsEnabled = item.Role != "Owner" };
                 var save = new Button { Content = "Guardar rol", IsEnabled = item.Role != "Owner" };
                 var remove = new Button { Content = "Eliminar acceso", IsEnabled = item.Role != "Owner" };
                 toggle.Click += async (_, _) => { await api.UpdateAdminAsync(item.UserId, item.Role, !item.Enabled); await LoadAsync(); };
-                save.Click += async (_, _) => { await api.UpdateAdminAsync(item.UserId, role.SelectedItem?.ToString() ?? item.Role, item.Enabled); await LoadAsync(); };
+                save.Click += async (_, _) => { await api.UpdateAdminAsync(item.UserId, ApiRole(role.SelectedItem?.ToString() ?? "Operador"), item.Enabled); await LoadAsync(); };
                 remove.Click += async (_, _) => { await api.RemoveAdminAsync(item.UserId); await LoadAsync(); };
                 list.Children.Add(new Border { Background = Brushes.White, Padding = new Thickness(12), Child = new StackPanel { Spacing = 6, Children = { new TextBlock { Text = $"{item.DisplayName} · {item.Email} · {(item.Enabled ? "Activo" : "Suspendido")}", FontWeight = FontWeight.Bold }, new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Children = { role, save, toggle, remove } } } } });
             }

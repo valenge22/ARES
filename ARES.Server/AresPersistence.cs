@@ -81,10 +81,14 @@ internal sealed class AresPersistence
                 created_at timestamptz not null default now(),
                 updated_at timestamptz not null default now(),
                 constraint ck_ares_admin_users_role
-                    check (role in ('Owner', 'Administrator', 'Supervisor', 'Viewer'))
+                    check (role in ('Owner', 'Administrator', 'Operator', 'Viewer'))
             );
 
             alter table ares_admin_users add column if not exists email varchar(320);
+            alter table ares_admin_users drop constraint if exists ck_ares_admin_users_role;
+            update ares_admin_users set role='Operator' where role='Supervisor';
+            alter table ares_admin_users add constraint ck_ares_admin_users_role
+                check (role in ('Owner', 'Administrator', 'Operator', 'Viewer'));
             alter table ares_admin_users add column if not exists organization_id uuid;
             update ares_admin_users set organization_id='00000000-0000-0000-0000-000000000001' where organization_id is null;
             alter table ares_admin_users alter column organization_id set not null;
@@ -100,7 +104,8 @@ internal sealed class AresPersistence
                 constraint ck_ares_registration_status check (status in ('Pending', 'Approved', 'Rejected'))
             );
             alter table ares_registration_requests add column if not exists organization_id uuid;
-            alter table ares_registration_requests add column if not exists invited_role varchar(20) not null default 'Viewer';
+            alter table ares_registration_requests add column if not exists invited_role varchar(20) not null default 'Operator';
+            update ares_registration_requests set invited_role='Operator' where invited_role='Supervisor';
             update ares_registration_requests set organization_id='00000000-0000-0000-0000-000000000001' where organization_id is null;
             alter table ares_registration_requests alter column organization_id set not null;
 
@@ -117,7 +122,8 @@ internal sealed class AresPersistence
                 constraint ck_ares_invitation_uses check (max_uses between 1 and 1000 and used_count >= 0)
             );
             alter table ares_invitation_codes add column if not exists organization_id uuid;
-            alter table ares_invitation_codes add column if not exists invited_role varchar(20) not null default 'Viewer';
+            alter table ares_invitation_codes add column if not exists invited_role varchar(20) not null default 'Operator';
+            update ares_invitation_codes set invited_role='Operator' where invited_role='Supervisor';
             update ares_invitation_codes set organization_id='00000000-0000-0000-0000-000000000001' where organization_id is null;
             alter table ares_invitation_codes alter column organization_id set not null;
 

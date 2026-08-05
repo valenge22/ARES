@@ -30,6 +30,23 @@ namespace AdministracionEmpleados
         private List<ControlSessionStatus> sesionesPanel = [];
         private List<GroupPolicy> grupos = [new() { Grupo = "General" }];
 
+        private static string RolActual => AresControlAuth.Client.User?.Role ?? "Viewer";
+        private static bool PuedeOperarEquipos => RolActual is "Owner" or "Administrator" or "Operator";
+        private static bool PuedeAdministrarEquipos => RolActual is "Owner" or "Administrator";
+        private static string NombreRol(string role) => role switch
+        {
+            "Owner" => "Propietario",
+            "Administrator" => "Administrador",
+            "Operator" or "Supervisor" => "Operador",
+            _ => "Solo lectura"
+        };
+        private static string RolApi(string nombre) => nombre switch
+        {
+            "Administrador" => "Administrator",
+            "Operador" => "Operator",
+            _ => "Operator"
+        };
+
         public MainForm()
         {
             InitializeComponent();
@@ -192,6 +209,7 @@ namespace AdministracionEmpleados
                 Margin = new Padding(0, 18, 8, 18)
             };
             borrar.FlatAppearance.BorderSize = 0;
+            borrar.Visible = PuedeAdministrarEquipos;
             borrar.Click += async (_, _) =>
             {
                 if (MessageBox.Show(
@@ -219,6 +237,7 @@ namespace AdministracionEmpleados
                 Cursor = Cursors.Hand
             };
             publicar.FlatAppearance.BorderSize = 0;
+            publicar.Visible = PuedeAdministrarEquipos;
             publicar.Click += async (_, _) =>
             {
                 using var file = new OpenFileDialog { Filter = "Paquete ARES Agent (*.zip)|*.zip", Title = "Seleccioná el ZIP oficial del Agent" };
@@ -237,6 +256,7 @@ namespace AdministracionEmpleados
             };
             encabezado.Controls.Add(publicar);
             var vincular = new Button { Text = "Vincular equipo", Dock = DockStyle.Right, Width = 135, FlatStyle = FlatStyle.Flat, BackColor = Color.FromArgb(14, 116, 144), ForeColor = Color.White, Font = new Font("Segoe UI", 9F, FontStyle.Bold), Cursor = Cursors.Hand };
+            vincular.Visible = PuedeAdministrarEquipos;
             vincular.FlatAppearance.BorderSize = 0;
             vincular.Click += async (_, _) => await MostrarNuevaVinculacionAsync();
             encabezado.Controls.Add(vincular);
@@ -492,16 +512,16 @@ namespace AdministracionEmpleados
                 return boton;
             }
 
-            acciones.Controls.Add(CrearAccion(pc.EstaBloqueada ? "Desbloquear equipo" : "Bloquear equipo", "bloqueo", Color.FromArgb(37, 99, 235)));
+            acciones.Controls.Add(CrearAccion(pc.EstaBloqueada ? "Desbloquear equipo" : "Bloquear equipo", "bloqueo", Color.FromArgb(37, 99, 235), PuedeOperarEquipos));
             acciones.Controls.Add(CrearAccion("Ver detalles del equipo", "ver"));
-            acciones.Controls.Add(CrearAccion("Cambiar nombre", "renombrar"));
-            acciones.Controls.Add(CrearAccion("Mover a otro grupo", "grupo"));
-            acciones.Controls.Add(CrearAccion("Configurar excepción temporal", "excepcion"));
+            acciones.Controls.Add(CrearAccion("Cambiar nombre", "renombrar", habilitado: PuedeOperarEquipos));
+            acciones.Controls.Add(CrearAccion("Mover a otro grupo", "grupo", habilitado: PuedeOperarEquipos));
+            acciones.Controls.Add(CrearAccion("Configurar excepción temporal", "excepcion", habilitado: PuedeOperarEquipos));
             acciones.Controls.Add(CrearAccion(
                 pc.ActualizacionDisponible ? $"Actualizar ARES Agent a v{pc.UltimaVersion}" : $"ARES Agent v{pc.Version} está actualizado",
-                "actualizar", habilitado: pc.ActualizacionDisponible));
-            acciones.Controls.Add(CrearAccion("Renovar credencial del equipo", "renovar", habilitado: pc.CredencialIndividual));
-            acciones.Controls.Add(CrearAccion("Revocar acceso del equipo", "revocar", Color.FromArgb(220, 38, 38), pc.CredencialIndividual));
+                "actualizar", habilitado: pc.ActualizacionDisponible && PuedeAdministrarEquipos));
+            acciones.Controls.Add(CrearAccion("Renovar credencial del equipo", "renovar", habilitado: pc.CredencialIndividual && PuedeAdministrarEquipos));
+            acciones.Controls.Add(CrearAccion("Revocar acceso del equipo", "revocar", Color.FromArgb(220, 38, 38), pc.CredencialIndividual && PuedeAdministrarEquipos));
 
             var cerrar = new Button { Text = "Cerrar", Width = 105, Height = 36, Location = new Point(351, 564), DialogResult = DialogResult.Cancel };
             form.Controls.AddRange([titulo, resumen, separador, acciones, cerrar]);
@@ -644,6 +664,7 @@ namespace AdministracionEmpleados
             tarjeta.Controls.Add(tabla);
             var encabezado = CrearEncabezadoTarjeta("Directorio de empleados", "Carpetas y asignaciones activas dentro de la organización");
             var horarios = new Button { Text = "📅 Horarios", Dock = DockStyle.Right, Width = 130, FlatStyle = FlatStyle.Flat, BackColor = Color.FromArgb(37, 99, 235), ForeColor = Color.White };
+            horarios.Visible = PuedeAdministrarEquipos;
             horarios.FlatAppearance.BorderSize = 0; horarios.Click += (_, _) => new ScheduleForm(discoveryService, empleadoService.ObtenerEmpleados()).ShowDialog(this);
             encabezado.Controls.Add(horarios); encabezado.Controls.Add(CrearSelectorCarpetas()); tarjeta.Controls.Add(encabezado);
             _ = ActualizarEstadoAgentesAsync(tabla);
@@ -683,6 +704,7 @@ namespace AdministracionEmpleados
             actividad.Controls.Add(CrearTablaSesionesPanel());
             var sessionsHeader = CrearEncabezadoTarjeta("Sesiones activas del Centro de Control", "Nombre editable, usuario, equipo, plataforma y última conexión");
             var updateAll = new Button { Text = "Actualizar todos", Dock = DockStyle.Right, Width = 140, BackColor = Color.FromArgb(124, 58, 237), ForeColor = Color.White, FlatStyle = FlatStyle.Flat };
+            updateAll.Visible = PuedeAdministrarEquipos;
             updateAll.FlatAppearance.BorderSize = 0; updateAll.Click += async (_, _) => await ActualizarSesionesPanelAsync(sesionesPanel.Where(x => x.ActualizacionDisponible).ToList());
             sessionsHeader.Controls.Add(updateAll); actividad.Controls.Add(sessionsHeader);
             panel.Controls.Add(actividad, 0, 1);
@@ -698,6 +720,8 @@ namespace AdministracionEmpleados
                     x.UltimaConexionUtc.ToLocalTime().ToString("dd/MM/yyyy HH:mm:ss") }).ToList());
             table.Columns.Add(new DataGridViewButtonColumn { Name = "RenombrarSesion", HeaderText = "", Text = "Cambiar nombre", UseColumnTextForButtonValue = true });
             table.Columns.Add(new DataGridViewButtonColumn { Name = "ActualizarSesion", HeaderText = "", FillWeight = 70 });
+            table.Columns["RenombrarSesion"]!.Visible = PuedeAdministrarEquipos;
+            table.Columns["ActualizarSesion"]!.Visible = PuedeAdministrarEquipos;
             for (int i = 0; i < table.Rows.Count && i < sesionesPanel.Count; i++) table.Rows[i].Tag = sesionesPanel[i];
             table.CellContentClick += async (_, e) =>
             {
@@ -804,7 +828,7 @@ namespace AdministracionEmpleados
             AresSettings configuracion = AresSettings.Cargar();
             var contenido = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.TopDown, Padding = new Padding(28, 22, 28, 28), WrapContents = false };
             TextBox txtServidor = CrearCampoConfiguracion("URL HTTPS del servidor", configuracion.ServerUrl, contenido);
-            string usuario = AresControlAuth.Client.User is null ? "" : $"{AresControlAuth.Client.User.DisplayName} · {AresControlAuth.Client.User.Email} · {AresControlAuth.Client.User.Role}";
+            string usuario = AresControlAuth.Client.User is null ? "" : $"{AresControlAuth.Client.User.DisplayName} · {AresControlAuth.Client.User.Email} · {NombreRol(AresControlAuth.Client.User.Role)}";
             contenido.Controls.Add(new Label { AutoSize = true, ForeColor = Color.FromArgb(51, 65, 85), Margin = new Padding(0, 14, 0, 0), Text = $"Sesión: {usuario}" });
             var estado = new Label { AutoSize = true, ForeColor = Color.FromArgb(100, 116, 139), Margin = new Padding(0, 14, 0, 0), Text = "La sesión está protegida para este usuario de Windows." };
             var guardar = new Button { Text = "Guardar y probar conexión", Width = 220, Height = 40, Margin = new Padding(0, 20, 0, 0), FlatStyle = FlatStyle.Flat, BackColor = Color.FromArgb(37, 99, 235), ForeColor = Color.White, Cursor = Cursors.Hand };
@@ -861,10 +885,10 @@ namespace AdministracionEmpleados
                 var pending = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.TopDown, WrapContents = false, AutoScroll = true, Padding = new Padding(15) };
                 foreach (var item in requests.Where(x => x.Status == "Pending"))
                 {
-                    var role = new ComboBox { Width = 140, DropDownStyle = ComboBoxStyle.DropDownList }; role.Items.AddRange(["Administrator", "Supervisor", "Viewer"]); role.SelectedIndex = 1;
+                    var role = new ComboBox { Width = 140, DropDownStyle = ComboBoxStyle.DropDownList }; role.Items.AddRange(["Administrador", "Operador"]); role.SelectedItem = "Operador";
                     var approve = new Button { Text = "Aprobar", Width = 90 }; var reject = new Button { Text = "Rechazar", Width = 90 };
                     var row = new FlowLayoutPanel { Width = 820, Height = 48, Controls = { new Label { Text = $"{item.DisplayName}\n{item.Email}", Width = 360, Height = 42 }, role, approve, reject } };
-                    approve.Click += async (_, _) => { await discoveryService.AprobarRegistroAsync(item.UserId, role.Text); await LoadAsync(); };
+                    approve.Click += async (_, _) => { await discoveryService.AprobarRegistroAsync(item.UserId, RolApi(role.Text)); await LoadAsync(); };
                     reject.Click += async (_, _) => { await discoveryService.RechazarRegistroAsync(item.UserId); await LoadAsync(); };
                     pending.Controls.Add(row);
                 }
@@ -873,12 +897,12 @@ namespace AdministracionEmpleados
                 var users = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.TopDown, WrapContents = false, AutoScroll = true, Padding = new Padding(15) };
                 foreach (var item in await discoveryService.ObtenerUsuariosPanelAsync())
                 {
-                    var role = new ComboBox { Width = 140, DropDownStyle = ComboBoxStyle.DropDownList, Enabled = item.Role != "Owner" }; role.Items.AddRange(["Administrator", "Supervisor", "Viewer"]); role.SelectedItem = item.Role;
+                    var role = new ComboBox { Width = 140, DropDownStyle = ComboBoxStyle.DropDownList, Enabled = item.Role != "Owner" }; role.Items.AddRange(["Administrador", "Operador"]); role.SelectedItem = NombreRol(item.Role);
                     var toggle = new Button { Text = item.Enabled ? "Suspender" : "Habilitar", Width = 100, Enabled = item.Role != "Owner" };
                     var save = new Button { Text = "Guardar rol", Width = 100, Enabled = item.Role != "Owner" };
                     var remove = new Button { Text = "Eliminar acceso", Width = 110, Enabled = item.Role != "Owner" };
                     var row = new FlowLayoutPanel { Width = 850, Height = 48, Controls = { new Label { Text = $"{item.DisplayName}\n{item.Email}", Width = 330, Height = 42 }, role, save, toggle, remove } };
-                    save.Click += async (_, _) => { await discoveryService.ActualizarUsuarioPanelAsync(item.UserId, role.Text, item.Enabled); await LoadAsync(); };
+                    save.Click += async (_, _) => { await discoveryService.ActualizarUsuarioPanelAsync(item.UserId, RolApi(role.Text), item.Enabled); await LoadAsync(); };
                     toggle.Click += async (_, _) => { await discoveryService.ActualizarUsuarioPanelAsync(item.UserId, item.Role, !item.Enabled); await LoadAsync(); };
                     remove.Click += async (_, _) => { if (MessageBox.Show($"¿Eliminar el acceso de {item.DisplayName}?", "ARES", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) == DialogResult.Yes) { await discoveryService.EliminarUsuarioPanelAsync(item.UserId); await LoadAsync(); } };
                     users.Controls.Add(row);
@@ -898,11 +922,11 @@ namespace AdministracionEmpleados
                 {
                     using var form = new Form { Text = "Nueva invitación", Width = 420, Height = 350, StartPosition = FormStartPosition.CenterParent, FormBorderStyle = FormBorderStyle.FixedDialog };
                     var uses = new NumericUpDown { Minimum = 1, Maximum = 1000, Value = 1, Width = 160 }; var hours = new NumericUpDown { Minimum = 1, Maximum = 720, Value = 48, Width = 160 };
-                    var role = new ComboBox { Width = 190, DropDownStyle = ComboBoxStyle.DropDownList }; role.Items.AddRange(["Administrator", "Supervisor", "Viewer"]); role.SelectedItem = "Viewer";
+                    var role = new ComboBox { Width = 190, DropDownStyle = ComboBoxStyle.DropDownList }; role.Items.AddRange(["Administrador", "Operador"]); role.SelectedItem = "Operador";
                     var create = new Button { Text = "Generar código", Width = 160, Height = 38 };
                     var layout = new FlowLayoutPanel { Location = new Point(30, 25), Width = 340, Height = 280, FlowDirection = FlowDirection.TopDown, WrapContents = false, Controls = { new Label { Text = "Rol que recibirá el invitado", AutoSize = true }, role, new Label { Text = "Cantidad máxima de usos", AutoSize = true }, uses, new Label { Text = "Duración en horas", AutoSize = true }, hours, create } };
                     form.Controls.Add(layout);
-                    create.Click += async (_, _) => { CreatedInvitation result = await discoveryService.CrearInvitacionAsync((int)uses.Value, (int)hours.Value, role.Text); Clipboard.SetText(result.Code); MessageBox.Show($"Código creado para el rol {role.Text} y copiado:\n\n{result.Code}\n\nSe mostrará completo solamente esta vez.", "ARES", MessageBoxButtons.OK, MessageBoxIcon.Information); form.Close(); await LoadAsync(); };
+                    create.Click += async (_, _) => { CreatedInvitation result = await discoveryService.CrearInvitacionAsync((int)uses.Value, (int)hours.Value, RolApi(role.Text)); Clipboard.SetText(result.Code); MessageBox.Show($"Código creado para el rol {role.Text} y copiado:\n\n{result.Code}\n\nSe mostrará completo solamente esta vez.", "ARES", MessageBoxButtons.OK, MessageBoxIcon.Information); form.Close(); await LoadAsync(); };
                     form.ShowDialog(dialog);
                 };
                 try

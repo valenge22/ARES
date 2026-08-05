@@ -33,8 +33,8 @@ string updateVersionPath = Path.Combine(AppContext.BaseDirectory, "data", "agent
 string controlSessionsPath = Path.Combine(AppContext.BaseDirectory, "data", "control-sessions.json");
 string controlWindowsPackagePath = Path.Combine(AppContext.BaseDirectory, "data", "control-windows-update.zip");
 string controlMacPackagePath = Path.Combine(AppContext.BaseDirectory, "data", "control-macos-update.pkg");
-string latestWindowsControlVersion = "1.6.2";
-string latestMacControlVersion = "1.5.0";
+string latestWindowsControlVersion = "1.6.3";
+string latestMacControlVersion = "1.5.1";
 Directory.CreateDirectory(Path.GetDirectoryName(dataPath)!);
 
 var agents = new ConcurrentDictionary<string, AgentStatus>(StringComparer.OrdinalIgnoreCase);
@@ -308,10 +308,10 @@ app.MapDelete("/api/admin/invitations/{id:guid}", async (Guid id, HttpContext co
 });
 
 app.MapGet("/api/admin/device-enrollments", async (HttpContext context) =>
-    IsOwner(context) ? Results.Ok(await persistence.GetDeviceEnrollmentsAsync(CurrentOrganization(context))) : Results.Forbid());
+    IsAdministrator(context) ? Results.Ok(await persistence.GetDeviceEnrollmentsAsync(CurrentOrganization(context))) : Results.Forbid());
 app.MapPost("/api/admin/device-enrollments", async (CreateDeviceEnrollmentRequest request, HttpContext context) =>
 {
-    if (!IsOwner(context)) return Results.Forbid();
+    if (!IsAdministrator(context)) return Results.Forbid();
     string requestedGroup = request.Group?.Trim() ?? "";
     if (request.MaxUses is < 1 or > 1000 || request.DurationHours is < 1 or > 720 ||
         !GetPolicies(CurrentOrganization(context)).Any(x => x.Grupo.Equals(requestedGroup, StringComparison.OrdinalIgnoreCase)))
@@ -325,12 +325,12 @@ app.MapPost("/api/admin/device-enrollments", async (CreateDeviceEnrollmentReques
 });
 app.MapDelete("/api/admin/device-enrollments/{id:guid}", async (Guid id, HttpContext context) =>
 {
-    if (!IsOwner(context)) return Results.Forbid();
+    if (!IsAdministrator(context)) return Results.Forbid();
     await persistence.RevokeDeviceEnrollmentAsync(id, CurrentOrganization(context)); return Results.Ok(new { revoked = true });
 });
 app.MapPost("/api/admin/devices/{id}/rotate", async (string id, HttpContext context) =>
 {
-    if (!IsOwner(context)) return Results.Forbid();
+    if (!IsAdministrator(context)) return Results.Forbid();
     bool requested = await persistence.RequestDeviceRotationAsync(CurrentOrganization(context), id);
     if (!requested) return Results.NotFound(new { error = "El equipo no está vinculado o ya fue revocado." });
     await RegistrarEventoAsync(id, id, "CREDENCIAL_RENOVACION_SOLICITADA", "La renovación se aplicará cuando el servicio del equipo se conecte.", CurrentOrganization(context));
@@ -338,7 +338,7 @@ app.MapPost("/api/admin/devices/{id}/rotate", async (string id, HttpContext cont
 });
 app.MapDelete("/api/admin/devices/{id}", async (string id, HttpContext context) =>
 {
-    if (!IsOwner(context)) return Results.Forbid();
+    if (!IsAdministrator(context)) return Results.Forbid();
     bool revoked = await persistence.RevokeDeviceAsync(CurrentOrganization(context), id);
     if (!revoked) return Results.NotFound(new { error = "El equipo no está vinculado o ya fue revocado." });
     if (FindAgent(context, id) is AgentStatus agent) agent.EstaEnLinea = false;
@@ -968,7 +968,8 @@ List<GroupPolicy> GetPolicies(Guid organizationId)
     return policies;
 }
 bool IsOwner(HttpContext context) => context.Items["AresAdmin"] is AuthenticatedAdmin admin && admin.Role == "Owner";
-bool ValidRole(string role) => role is "Owner" or "Administrator" or "Supervisor" or "Viewer";
+bool IsAdministrator(HttpContext context) => context.Items["AresAdmin"] is AuthenticatedAdmin admin && admin.Role is "Owner" or "Administrator";
+bool ValidRole(string role) => role is "Owner" or "Administrator" or "Operator" or "Viewer";
 byte[] HashInvitationCode(string? code) => SHA256.HashData(Encoding.UTF8.GetBytes((code ?? "").Trim().ToUpperInvariant()));
 byte[] HashSecret(string? value) => SHA256.HashData(Encoding.UTF8.GetBytes((value ?? "").Trim().ToUpperInvariant()));
 bool CanAccess(string role, string method, PathString path)
@@ -977,10 +978,10 @@ bool CanAccess(string role, string method, PathString path)
     if (HttpMethods.IsGet(method)) return true;
     if (path.Equals("/api/control-sessions/heartbeat")) return true;
     if (role == "Viewer") return false;
-    // Supervisor: operación cotidiana de equipos, sin administración global,
+    // Operador: operación cotidiana de equipos, sin administración global,
     // publicación de horarios, limpieza ni distribución de software.
     string value = path.Value ?? "";
-    return value.StartsWith("/api/agents/", StringComparison.OrdinalIgnoreCase) &&
+    return role == "Operator" && value.StartsWith("/api/agents/", StringComparison.OrdinalIgnoreCase) &&
         (value.EndsWith("/restriction", StringComparison.OrdinalIgnoreCase) ||
          value.EndsWith("/override", StringComparison.OrdinalIgnoreCase) ||
          value.EndsWith("/name", StringComparison.OrdinalIgnoreCase) ||

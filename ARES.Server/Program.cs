@@ -342,10 +342,14 @@ app.MapPost("/api/account/mfa/enroll", async (HttpContext context, CancellationT
     JsonElement totp = value.GetProperty("totp");
     string qr = totp.TryGetProperty("qr_code", out JsonElement qrValue) ? qrValue.GetString() ?? "" : "";
     string image = qr;
-    int svgStart = qr.IndexOf("<svg", StringComparison.OrdinalIgnoreCase);
+    string svgMarkup = qr;
+    if (qr.StartsWith("data:image/svg+xml", StringComparison.OrdinalIgnoreCase) && qr.IndexOf(',') is int comma && comma >= 0)
+        svgMarkup = Uri.UnescapeDataString(qr[(comma + 1)..]);
+    int svgStart = svgMarkup.IndexOf("<svg", StringComparison.OrdinalIgnoreCase);
     if (svgStart >= 0)
     {
-        string svg = qr[svgStart..];
+        string svg = svgMarkup[svgStart..];
+        svgMarkup = svg;
         image = $"data:image/svg+xml;charset=utf-8,{Uri.EscapeDataString(svg)}";
     }
     else if (qr.StartsWith("data:image/svg+xml;utf-8,", StringComparison.OrdinalIgnoreCase))
@@ -354,6 +358,7 @@ app.MapPost("/api/account/mfa/enroll", async (HttpContext context, CancellationT
     }
     return Results.Ok(new { id, totp = new {
         qr_code = image,
+        svg = svgStart >= 0 ? svgMarkup : "",
         secret = totp.TryGetProperty("secret", out JsonElement secret) ? secret.GetString() ?? "" : "",
         uri = totp.TryGetProperty("uri", out JsonElement uri) ? uri.GetString() ?? "" : ""
     }});

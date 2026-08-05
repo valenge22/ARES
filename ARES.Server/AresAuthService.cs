@@ -52,10 +52,12 @@ internal sealed class AresAuthService
             try
             {
                 using JsonDocument error = JsonDocument.Parse(payload);
-                if (error.RootElement.TryGetProperty("code", out JsonElement codeElement)) code = codeElement.GetString() ?? "";
+                if (error.RootElement.TryGetProperty("error_code", out JsonElement errorCode)) code = errorCode.ToString();
+                else if (error.RootElement.TryGetProperty("code", out JsonElement codeElement)) code = codeElement.ToString();
                 if (error.RootElement.TryGetProperty("msg", out JsonElement msg)) message = msg.GetString() ?? message;
                 else if (error.RootElement.TryGetProperty("message", out JsonElement detail)) message = detail.GetString() ?? message;
                 else if (error.RootElement.TryGetProperty("error_description", out JsonElement description)) message = description.GetString() ?? message;
+                else if (error.RootElement.TryGetProperty("error", out JsonElement generic)) message = generic.ToString();
             }
             catch { }
             return new(null, code, message);

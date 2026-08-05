@@ -318,15 +318,15 @@ app.MapPost("/api/auth/mfa/verify", async (MfaVerifyRequest request, HttpContext
 app.MapGet("/api/account/mfa", async (HttpContext context, CancellationToken cancellationToken) =>
 {
     string token = BearerToken(context); JsonElement? result = await authService.ListMfaAsync(token, cancellationToken);
-    return result.HasValue ? Results.Json(result.Value) : Results.BadRequest(new { error = "No se pudo consultar el segundo factor." });
+    return result.HasValue ? Results.Ok(ExtractMfaFactors(result.Value)) : Results.BadRequest(new { error = "No se pudo consultar el segundo factor." });
 });
 app.MapPost("/api/account/mfa/enroll", async (HttpContext context, CancellationToken cancellationToken) =>
 {
     string token = BearerToken(context);
     JsonElement? current = await authService.ListMfaAsync(token, cancellationToken);
-    if (current.HasValue && current.Value.TryGetProperty("factors", out JsonElement factors) && factors.ValueKind == JsonValueKind.Array)
+    if (current.HasValue)
     {
-        foreach (JsonElement factor in factors.EnumerateArray())
+        foreach (JsonElement factor in ExtractMfaFactors(current.Value))
         {
             string status = factor.TryGetProperty("status", out JsonElement statusValue) ? statusValue.GetString() ?? "" : "";
             string type = factor.TryGetProperty("factor_type", out JsonElement typeValue) ? typeValue.GetString() ?? "" : "";
@@ -1105,6 +1105,29 @@ bool IsPlatformAdmin(HttpContext context) => context.Items["AresAdmin"] is Authe
 bool ValidRole(string role) => role is "Owner" or "Administrator" or "Operator" or "Viewer";
 byte[] HashInvitationCode(string? code) => SHA256.HashData(Encoding.UTF8.GetBytes((code ?? "").Trim().ToUpperInvariant()));
 byte[] HashSecret(string? value) => SHA256.HashData(Encoding.UTF8.GetBytes((value ?? "").Trim().ToUpperInvariant()));
+List<JsonElement> ExtractMfaFactors(JsonElement root)
+{
+    var result = new List<JsonElement>();
+    void Visit(JsonElement value)
+    {
+        if (value.ValueKind == JsonValueKind.Array)
+        {
+            foreach (JsonElement item in value.EnumerateArray())
+            {
+                if (item.ValueKind == JsonValueKind.Object && item.TryGetProperty("id", out _)) result.Add(item.Clone());
+                else Visit(item);
+            }
+            return;
+        }
+        if (value.ValueKind != JsonValueKind.Object) return;
+        foreach (string property in new[] { "factors", "all", "totp", "phone" })
+            if (value.TryGetProperty(property, out JsonElement nested)) Visit(nested);
+    }
+    Visit(root);
+    return result.GroupBy(x => x.TryGetProperty("id", out JsonElement id) ? id.GetString() : null)
+        .Select(x => x.First()).ToList();
+}
+
 byte[] HashToken(string? value) => SHA256.HashData(Encoding.UTF8.GetBytes(value ?? ""));
 string ClientIp(HttpContext context) => context.Request.Headers["X-Forwarded-For"].FirstOrDefault()?.Split(',')[0].Trim()
     ?? context.Connection.RemoteIpAddress?.ToString() ?? "Desconocida";

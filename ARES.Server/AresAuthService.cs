@@ -155,11 +155,28 @@ internal sealed class AresAuthService
 
     private static string? VerifiedFactorId(JsonElement user)
     {
-        if (!user.TryGetProperty("factors", out JsonElement factors) || factors.ValueKind != JsonValueKind.Array) return null;
-        foreach (JsonElement factor in factors.EnumerateArray())
-            if (factor.TryGetProperty("status", out JsonElement status) && status.GetString() == "verified" &&
-                factor.TryGetProperty("factor_type", out JsonElement type) && type.GetString() == "totp" && factor.TryGetProperty("id", out JsonElement id)) return id.GetString();
-        return null;
+        string? found = null;
+        void Visit(JsonElement value)
+        {
+            if (found is not null) return;
+            if (value.ValueKind == JsonValueKind.Array)
+            {
+                foreach (JsonElement factor in value.EnumerateArray()) Visit(factor);
+                return;
+            }
+            if (value.ValueKind != JsonValueKind.Object) return;
+            if (value.TryGetProperty("id", out JsonElement id) &&
+                value.TryGetProperty("status", out JsonElement status) && status.GetString() == "verified" &&
+                (!value.TryGetProperty("factor_type", out JsonElement type) || type.GetString() == "totp"))
+            {
+                found = id.GetString();
+                return;
+            }
+            foreach (string property in new[] { "factors", "all", "totp" })
+                if (value.TryGetProperty(property, out JsonElement nested)) Visit(nested);
+        }
+        Visit(user);
+        return found;
     }
 
     private static string ReadAal(string jwt)

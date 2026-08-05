@@ -41,9 +41,12 @@ internal sealed class SetupForm : Form
     private readonly Label status = new() { AutoSize = true, ForeColor = Color.FromArgb(71, 85, 105) };
     private readonly ProgressBar progress = new() { Dock = DockStyle.Top, Height = 8, Style = ProgressBarStyle.Marquee, Visible = false };
     private readonly Button install = new() { Text = "Instalar ARES Agent", Width = 180, Height = 42, BackColor = Color.FromArgb(37, 99, 235), ForeColor = Color.White, FlatStyle = FlatStyle.Flat };
+    private readonly Button relink = new() { Text = "Volver a vincular", Width = 140, Height = 42, Visible = false };
     private readonly Button cancel = new() { Text = "Cancelar", Width = 100, Height = 42, DialogResult = DialogResult.Cancel };
     private bool busy;
     private bool upgradeMode;
+    private bool existingInstallation;
+    private bool relinkMode;
     private string existingCredential = "";
     public bool Installed { get; private set; }
 
@@ -91,11 +94,12 @@ internal sealed class SetupForm : Form
 
         var actions = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.RightToLeft, WrapContents = false };
         install.FlatAppearance.BorderSize = 0;
-        actions.Controls.Add(install); actions.Controls.Add(cancel);
+        actions.Controls.Add(install); actions.Controls.Add(relink); actions.Controls.Add(cancel);
         body.Controls.Add(actions, 0, 7); body.SetColumnSpan(actions, 2);
 
         Controls.Add(body); Controls.Add(progress); Controls.Add(header);
         install.Click += async (_, _) => await InstallAsync();
+        relink.Click += (_, _) => BeginRelink();
         useExisting.CheckedChanged += (_, _) =>
         {
             employeePassword.Enabled = employeeConfirmation.Enabled = !useExisting.Checked;
@@ -116,14 +120,22 @@ internal sealed class SetupForm : Form
             if (!File.Exists(path)) return;
             InstalledAgentConfig? current = JsonSerializer.Deserialize<InstalledAgentConfig>(File.ReadAllText(path), new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
             if (current is null || string.IsNullOrWhiteSpace(current.DeviceCredential) || string.IsNullOrWhiteSpace(current.ManagedUser)) return;
-            upgradeMode = true; existingCredential = current.DeviceCredential; employee.Text = current.ManagedUser;
+            existingInstallation = true; upgradeMode = true; existingCredential = current.DeviceCredential; employee.Text = current.ManagedUser;
             linkCode.Text = "Credencial existente protegida"; linkCode.Enabled = false; employee.Enabled = false;
             useExisting.Checked = true; useExisting.Enabled = false;
             employeePassword.Enabled = employeeConfirmation.Enabled = adminPassword.Enabled = adminConfirmation.Enabled = false;
             install.Text = "Actualizar ARES Agent";
+            relink.Visible = true;
             status.Text = "Instalación existente detectada. No es necesario volver a vincular el equipo.";
         }
-        catch { upgradeMode = false; existingCredential = ""; }
+        catch { existingInstallation = false; upgradeMode = false; existingCredential = ""; }
+    }
+
+    private void BeginRelink()
+    {
+        relinkMode = true; upgradeMode = false; linkCode.Enabled = true; linkCode.Clear(); linkCode.Focus();
+        relink.Enabled = false; install.Text = "Vincular nuevamente";
+        status.Text = "Ingresá un código temporal nuevo. Se conservarán el usuario y las contraseñas actuales.";
     }
 
     private async Task InstallAsync()
@@ -148,16 +160,16 @@ internal sealed class SetupForm : Form
             start.ArgumentList.Add("-ServerUrl"); start.ArgumentList.Add(ServerUrl);
             start.ArgumentList.Add("-ManagedUser"); start.ArgumentList.Add(employee.Text.Trim());
             start.ArgumentList.Add("-InstallerAdminUser"); start.ArgumentList.Add(Environment.UserName);
-            if (!upgradeMode)
+            if (!existingInstallation)
             {
                 start.ArgumentList.Add("-ProvisionStandardUser");
                 if (useExisting.Checked) start.ArgumentList.Add("-UseExistingStandardUser");
             }
             start.ArgumentList.Add("-NonInteractiveProvisioning");
             start.ArgumentList.Add("-LogPath"); start.ArgumentList.Add(Path.Combine(Path.GetTempPath(), "ARES-Agent-Install.log"));
-            if (!upgradeMode && !useExisting.Checked)
+            if (!existingInstallation && !useExisting.Checked)
                 start.Environment["ARES_SETUP_EMPLOYEE_PASSWORD"] = employeePassword.Text;
-            if (!upgradeMode) start.Environment["ARES_SETUP_ADMIN_PASSWORD"] = adminPassword.Text;
+            if (!existingInstallation) start.Environment["ARES_SETUP_ADMIN_PASSWORD"] = adminPassword.Text;
             if (upgradeMode) start.Environment["ARES_SETUP_DEVICE_CREDENTIAL"] = existingCredential;
             else
             {
@@ -177,7 +189,10 @@ internal sealed class SetupForm : Form
                 string detail = File.Exists(logPath) ? File.ReadAllText(logPath) : error;
                 throw new InvalidOperationException(string.IsNullOrWhiteSpace(detail) ? "La instalación no pudo completarse." : detail);
             }
-            MessageBox.Show(upgradeMode ? "ARES Agent se actualizó correctamente. No fue necesario volver a vincular el equipo." : "ARES Agent se instaló correctamente. Cerrá la sesión administradora e ingresá con la nueva cuenta del empleado.", "ARES", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            string successMessage = upgradeMode ? "ARES Agent se actualizó correctamente. No fue necesario volver a vincular el equipo."
+                : relinkMode ? "ARES Agent volvió a vincularse correctamente con una credencial nueva."
+                : "ARES Agent se instaló correctamente. Cerrá la sesión administradora e ingresá con la nueva cuenta del empleado.";
+            MessageBox.Show(successMessage, "ARES", MessageBoxButtons.OK, MessageBoxIcon.Information);
             Installed = true;
             SetBusy(false, "Instalación completada correctamente.");
             DialogResult = DialogResult.OK;
@@ -193,6 +208,7 @@ internal sealed class SetupForm : Form
     private string? ValidateInput()
     {
         if (upgradeMode) return null;
+        if (relinkMode) return linkCode.Text.Trim().StartsWith("ARES-PC-", StringComparison.OrdinalIgnoreCase) ? null : "Ingresá un código de vinculación ARES válido.";
         if (!linkCode.Text.Trim().StartsWith("ARES-PC-", StringComparison.OrdinalIgnoreCase)) return "Ingresá un código de vinculación ARES válido.";
         string name = employee.Text.Trim();
         if (name.Length is < 1 or > 20 || name.IndexOfAny("\\/[]:;|=,+*?<>@\"".ToCharArray()) >= 0 || name.EndsWith('.')) return "El nombre del empleado no es válido o supera 20 caracteres.";

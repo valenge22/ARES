@@ -90,7 +90,7 @@ $iscc = $isccCandidates | Select-Object -First 1
 if (-not $iscc) { throw 'No se encontro Inno Setup 6 (ISCC.exe).' }
 
 $iss = Join-Path $raiz 'ARES.Agent\Installer\ARES-Agent.iss'
-& $iscc "/DPackageSource=$salida" "/DSetupUiSource=$setupUi" "/DOutputDir=$(Join-Path $raiz 'distribucion')" '/DAppVersion=1.7.2' $iss
+& $iscc "/DPackageSource=$salida" "/DSetupUiSource=$setupUi" "/DOutputDir=$(Join-Path $raiz 'distribucion')" '/DAppVersion=1.7.3' $iss
 if ($LASTEXITCODE -ne 0 -or -not (Test-Path $setup)) { throw 'No se pudo generar el instalador EXE de ARES Agent.' }
 
 Write-Host "Paquete creado: $zip"

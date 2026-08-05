@@ -171,7 +171,12 @@ app.MapPost("/api/auth/refresh", async (RefreshRequest request, CancellationToke
 app.MapGet("/api/auth/me", (HttpContext context) => Results.Ok((AuthenticatedAdmin)context.Items["AresAdmin"]!));
 
 app.MapGet("/api/onboarding", async (HttpContext context) =>
-    Results.Ok(await persistence.GetOrganizationSetupAsync(CurrentOrganization(context))));
+{
+    Guid organizationId = CurrentOrganization(context);
+    OrganizationSetupInfo setup = await persistence.GetOrganizationSetupAsync(organizationId)
+        ?? new OrganizationSetupInfo(organizationId, "Organización ARES", $"org-{organizationId.ToString("N")[..8]}", false);
+    return Results.Ok(setup);
+});
 app.MapPost("/api/onboarding/complete", async (HttpContext context) =>
 {
     if (!IsOwner(context)) return Results.Forbid();

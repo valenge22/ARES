@@ -237,8 +237,21 @@ internal sealed class AresPersistence
         await using var connection = new NpgsqlConnection(connectionString); await connection.OpenAsync();
         await using var command = connection.CreateCommand();
         command.CommandText = "select organization_id,name,slug,onboarding_completed from ares_organizations where organization_id=@id and enabled=true";
-        command.Parameters.AddWithValue("id", organizationId); await using var reader = await command.ExecuteReaderAsync();
-        return await reader.ReadAsync() ? new(reader.GetGuid(0), reader.GetString(1), reader.GetString(2), reader.GetBoolean(3)) : null;
+        command.Parameters.AddWithValue("id", organizationId);
+        await using (var reader = await command.ExecuteReaderAsync())
+            if (await reader.ReadAsync()) return new(reader.GetGuid(0), reader.GetString(1), reader.GetString(2), reader.GetBoolean(3));
+
+        string slug = $"org-{organizationId.ToString("N")[..8]}";
+        await using var repair = connection.CreateCommand();
+        repair.CommandText = """
+            insert into ares_organizations(organization_id,name,slug,enabled,onboarding_completed)
+            values(@id,'Organización ARES',@slug,true,false)
+            on conflict(organization_id) do update set enabled=true
+            returning organization_id,name,slug,onboarding_completed
+            """;
+        repair.Parameters.AddWithValue("id", organizationId); repair.Parameters.AddWithValue("slug", slug);
+        await using var repaired = await repair.ExecuteReaderAsync();
+        return await repaired.ReadAsync() ? new(repaired.GetGuid(0), repaired.GetString(1), repaired.GetString(2), repaired.GetBoolean(3)) : null;
     }
 
     public async Task CompleteOrganizationSetupAsync(Guid organizationId)

@@ -117,17 +117,49 @@ internal sealed class AresPersistence
             update ares_invitation_codes set organization_id='00000000-0000-0000-0000-000000000001' where organization_id is null;
             alter table ares_invitation_codes alter column organization_id set not null;
 
+            create table if not exists ares_device_enrollment_codes (
+                enrollment_id uuid primary key,
+                organization_id uuid not null,
+                code_hash bytea not null unique,
+                code_prefix varchar(18) not null,
+                assigned_group varchar(20) not null default 'Grupo 1',
+                max_uses integer not null default 1,
+                used_count integer not null default 0,
+                expires_at timestamptz not null,
+                revoked boolean not null default false,
+                created_by uuid not null,
+                created_at timestamptz not null default now()
+            );
+
+            create table if not exists ares_devices (
+                organization_id uuid not null,
+                device_id varchar(64) not null,
+                machine_name varchar(100) not null,
+                assigned_group varchar(20) not null default 'Grupo 1',
+                credential_hash bytea not null unique,
+                enabled boolean not null default true,
+                enrollment_id uuid,
+                enrolled_at timestamptz not null default now(),
+                last_seen_at timestamptz,
+                primary key (organization_id, device_id)
+            );
+            alter table ares_devices add column if not exists assigned_group varchar(20) not null default 'Grupo 1';
+
             alter table ares_state enable row level security;
             alter table ares_admin_users enable row level security;
             alter table ares_registration_requests enable row level security;
             alter table ares_invitation_codes enable row level security;
             alter table ares_organizations enable row level security;
+            alter table ares_device_enrollment_codes enable row level security;
+            alter table ares_devices enable row level security;
 
             revoke all on table ares_state from anon, authenticated;
             revoke all on table ares_admin_users from anon, authenticated;
             revoke all on table ares_registration_requests from anon, authenticated;
             revoke all on table ares_invitation_codes from anon, authenticated;
             revoke all on table ares_organizations from anon, authenticated;
+            revoke all on table ares_device_enrollment_codes from anon, authenticated;
+            revoke all on table ares_devices from anon, authenticated;
             """;
         await command.ExecuteNonQueryAsync();
     }
@@ -319,6 +351,111 @@ internal sealed class AresPersistence
         command.Parameters.AddWithValue("id", invitationId); command.Parameters.AddWithValue("organization", organizationId); await command.ExecuteNonQueryAsync();
     }
 
+    public async Task<DeviceEnrollmentInfo> CreateDeviceEnrollmentAsync(Guid organizationId, byte[] codeHash, string prefix,
+        string assignedGroup, int maxUses, DateTimeOffset expiresAt, Guid createdBy)
+    {
+        Guid id = Guid.NewGuid();
+        await using var connection = new NpgsqlConnection(connectionString); await connection.OpenAsync();
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            insert into ares_device_enrollment_codes
+            (enrollment_id,organization_id,code_hash,code_prefix,assigned_group,max_uses,expires_at,created_by)
+            values(@id,@organization,@hash,@prefix,@group,@max,@expires,@creator)
+            """;
+        command.Parameters.AddWithValue("id", id); command.Parameters.AddWithValue("organization", organizationId);
+        command.Parameters.AddWithValue("hash", codeHash); command.Parameters.AddWithValue("prefix", prefix);
+        command.Parameters.AddWithValue("group", assignedGroup); command.Parameters.AddWithValue("max", maxUses);
+        command.Parameters.AddWithValue("expires", expiresAt); command.Parameters.AddWithValue("creator", createdBy);
+        await command.ExecuteNonQueryAsync();
+        return new(id, prefix, assignedGroup, maxUses, 0, expiresAt, false, DateTimeOffset.UtcNow);
+    }
+
+    public async Task<List<DeviceEnrollmentInfo>> GetDeviceEnrollmentsAsync(Guid organizationId)
+    {
+        var result = new List<DeviceEnrollmentInfo>();
+        await using var connection = new NpgsqlConnection(connectionString); await connection.OpenAsync();
+        await using var command = connection.CreateCommand();
+        command.CommandText = "select enrollment_id,code_prefix,assigned_group,max_uses,used_count,expires_at,revoked,created_at from ares_device_enrollment_codes where organization_id=@organization order by created_at desc limit 200";
+        command.Parameters.AddWithValue("organization", organizationId);
+        await using var reader = await command.ExecuteReaderAsync();
+        while (await reader.ReadAsync()) result.Add(new(reader.GetGuid(0), reader.GetString(1), reader.GetString(2), reader.GetInt32(3), reader.GetInt32(4), reader.GetFieldValue<DateTimeOffset>(5), reader.GetBoolean(6), reader.GetFieldValue<DateTimeOffset>(7)));
+        return result;
+    }
+
+    public async Task RevokeDeviceEnrollmentAsync(Guid enrollmentId, Guid organizationId)
+    {
+        await using var connection = new NpgsqlConnection(connectionString); await connection.OpenAsync();
+        await using var command = connection.CreateCommand();
+        command.CommandText = "update ares_device_enrollment_codes set revoked=true where enrollment_id=@id and organization_id=@organization";
+        command.Parameters.AddWithValue("id", enrollmentId); command.Parameters.AddWithValue("organization", organizationId);
+        await command.ExecuteNonQueryAsync();
+    }
+
+    public async Task<DeviceEnrollmentGrant?> EnrollDeviceAsync(byte[] codeHash, string deviceId, string machineName, byte[] credentialHash)
+    {
+        await using var connection = new NpgsqlConnection(connectionString); await connection.OpenAsync();
+        await using var transaction = await connection.BeginTransactionAsync();
+        await using var command = connection.CreateCommand(); command.Transaction = transaction;
+        command.CommandText = """
+            update ares_device_enrollment_codes set used_count=used_count+1
+            where code_hash=@hash and not revoked and expires_at>now() and used_count<max_uses
+            returning enrollment_id,organization_id,assigned_group
+            """;
+        command.Parameters.AddWithValue("hash", codeHash);
+        Guid enrollmentId; Guid organizationId; string group;
+        await using (var reader = await command.ExecuteReaderAsync())
+        {
+            if (!await reader.ReadAsync()) { await transaction.RollbackAsync(); return null; }
+            enrollmentId = reader.GetGuid(0); organizationId = reader.GetGuid(1); group = reader.GetString(2);
+        }
+        command.Parameters.Clear();
+        command.CommandText = """
+            insert into ares_devices(organization_id,device_id,machine_name,assigned_group,credential_hash,enabled,enrollment_id,enrolled_at,last_seen_at)
+            values(@organization,@device,@machine,@group,@credential,true,@enrollment,now(),now())
+            on conflict(organization_id,device_id) do update set machine_name=excluded.machine_name,
+                assigned_group=excluded.assigned_group,credential_hash=excluded.credential_hash,enabled=true,enrollment_id=excluded.enrollment_id,enrolled_at=now(),last_seen_at=now()
+            """;
+        command.Parameters.AddWithValue("organization", organizationId); command.Parameters.AddWithValue("device", deviceId);
+        command.Parameters.AddWithValue("machine", machineName); command.Parameters.AddWithValue("credential", credentialHash);
+        command.Parameters.AddWithValue("group", group);
+        command.Parameters.AddWithValue("enrollment", enrollmentId); await command.ExecuteNonQueryAsync();
+        await transaction.CommitAsync(); return new(enrollmentId, organizationId, group);
+    }
+
+    public async Task<DeviceIdentity?> ValidateDeviceAsync(byte[] credentialHash)
+    {
+        if (!UsesDatabase) return null;
+        await using var connection = new NpgsqlConnection(connectionString); await connection.OpenAsync();
+        await using var command = connection.CreateCommand();
+        command.CommandText = "select organization_id,device_id,assigned_group from ares_devices where credential_hash=@hash and enabled=true";
+        command.Parameters.AddWithValue("hash", credentialHash);
+        await using var reader = await command.ExecuteReaderAsync();
+        return await reader.ReadAsync() ? new DeviceIdentity(reader.GetGuid(0), reader.GetString(1), reader.GetString(2)) : null;
+    }
+
+    public async Task CancelDeviceEnrollmentAsync(Guid organizationId, string deviceId, byte[] credentialHash)
+    {
+        await using var connection = new NpgsqlConnection(connectionString); await connection.OpenAsync();
+        await using var transaction = await connection.BeginTransactionAsync();
+        Guid? enrollmentId = null;
+        await using (var command = connection.CreateCommand())
+        {
+            command.Transaction = transaction;
+            command.CommandText = "delete from ares_devices where organization_id=@organization and device_id=@device and credential_hash=@hash returning enrollment_id";
+            command.Parameters.AddWithValue("organization", organizationId); command.Parameters.AddWithValue("device", deviceId);
+            command.Parameters.AddWithValue("hash", credentialHash);
+            object? result = await command.ExecuteScalarAsync();
+            if (result is Guid id) enrollmentId = id;
+        }
+        if (enrollmentId.HasValue)
+        {
+            await using var restore = connection.CreateCommand(); restore.Transaction = transaction;
+            restore.CommandText = "update ares_device_enrollment_codes set used_count=greatest(used_count-1,0) where enrollment_id=@id";
+            restore.Parameters.AddWithValue("id", enrollmentId.Value); await restore.ExecuteNonQueryAsync();
+        }
+        await transaction.CommitAsync();
+    }
+
     public async Task<T?> LoadAsync<T>(string key)
     {
         if (!UsesDatabase) return default;
@@ -354,5 +491,8 @@ internal sealed class AresPersistence
 
 internal sealed record AdminUser(Guid UserId, Guid OrganizationId, string Email, string DisplayName, string Role, bool Enabled);
 internal sealed record InvitationGrant(Guid InvitationId, Guid OrganizationId, string InvitedRole);
+internal sealed record DeviceEnrollmentInfo(Guid EnrollmentId, string CodePrefix, string AssignedGroup, int MaxUses, int UsedCount, DateTimeOffset ExpiresAt, bool Revoked, DateTimeOffset CreatedAt);
+internal sealed record DeviceEnrollmentGrant(Guid EnrollmentId, Guid OrganizationId, string AssignedGroup);
+internal sealed record DeviceIdentity(Guid OrganizationId, string DeviceId, string AssignedGroup);
 internal sealed record RegistrationRequestInfo(Guid UserId, string Email, string DisplayName, string Status, DateTimeOffset RequestedAt, DateTimeOffset? ReviewedAt);
 internal sealed record InvitationInfo(Guid InvitationId, string CodePrefix, int MaxUses, int UsedCount, DateTimeOffset ExpiresAt, bool Revoked, DateTimeOffset CreatedAt);

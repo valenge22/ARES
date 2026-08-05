@@ -167,3 +167,21 @@ public sealed class CreatedInvitation
     public string Code { get; set; } = "";
     public InvitationInfo Invitation { get; set; } = new();
 }
+
+public sealed class DeviceEnrollmentInfo
+{
+    public Guid EnrollmentId { get; set; }
+    public string CodePrefix { get; set; } = "";
+    public string AssignedGroup { get; set; } = "Grupo 1";
+    public int MaxUses { get; set; }
+    public int UsedCount { get; set; }
+    public DateTimeOffset ExpiresAt { get; set; }
+    public bool Revoked { get; set; }
+    public DateTimeOffset CreatedAt { get; set; }
+}
+
+public sealed class CreatedDeviceEnrollment
+{
+    public string Code { get; set; } = "";
+    public DeviceEnrollmentInfo Enrollment { get; set; } = new();
+}

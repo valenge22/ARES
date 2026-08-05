@@ -116,3 +116,5 @@ internal sealed record UpdatePasswordRequest(string AccessToken, string Password
 internal sealed record ApproveRegistrationRequest(string Role);
 internal sealed record UpdateAdminRequest(string Role, bool Enabled);
 internal sealed record CreateInvitationRequest(int MaxUses, int DurationHours, string Role = "Viewer");
+internal sealed record CreateDeviceEnrollmentRequest(int MaxUses, int DurationHours, string Group = "Grupo 1");
+internal sealed record EnrollDeviceRequest(string Code, string DeviceId, string MachineName);

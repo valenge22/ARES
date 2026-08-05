@@ -1,6 +1,7 @@
 param(
     [string]$ServerUrl = 'https://ares-3bic.onrender.com',
     [string]$ApiKey = 'CAMBIAR-ESTA-CLAVE',
+    [string]$DeviceCredential = '',
     [string]$ManagedUser = '',
     [string]$InstallerAdminUser = $env:USERNAME,
     [switch]$ProvisionStandardUser,
@@ -47,6 +48,7 @@ if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administra
     $argumentosElevados = @(
         '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', ('"' + $PSCommandPath + '"'),
         '-ServerUrl', ('"' + $ServerUrl + '"'), '-ApiKey', ('"' + $ApiKey + '"'),
+        '-DeviceCredential', ('"' + $DeviceCredential + '"'),
         '-ManagedUser', ('"' + $ManagedUser + '"'),
         '-InstallerAdminUser', ('"' + $InstallerAdminUser + '"'),
         '-LogPath', ('"' + $LogPath + '"')
@@ -58,11 +60,11 @@ if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administra
 }
 
 if ($NonInteractiveProvisioning) {
-    $apiKeySegura = [Environment]::GetEnvironmentVariable('ARES_SETUP_API_KEY')
-    if ([string]::IsNullOrWhiteSpace($apiKeySegura)) { throw 'Falta la clave segura de ARES.' }
-    $ApiKey = $apiKeySegura
-    $apiKeySegura = $null
-    [Environment]::SetEnvironmentVariable('ARES_SETUP_API_KEY', $null, 'Process')
+    $credencialEquipo = [Environment]::GetEnvironmentVariable('ARES_SETUP_DEVICE_CREDENTIAL')
+    if ([string]::IsNullOrWhiteSpace($credencialEquipo)) { throw 'Falta la credencial individual del equipo.' }
+    $DeviceCredential = $credencialEquipo
+    $credencialEquipo = $null
+    [Environment]::SetEnvironmentVariable('ARES_SETUP_DEVICE_CREDENTIAL', $null, 'Process')
 }
 
 function Read-ConfirmedPassword([string]$Prompt, [string]$EnvironmentVariable = '') {
@@ -154,6 +156,7 @@ Copy-Item -Path (Join-Path $origen '*') -Destination $destino -Recurse -Force
 @{
     ServerUrl = $ServerUrl.TrimEnd('/')
     ApiKey = $ApiKey
+    DeviceCredential = $DeviceCredential
     HeartbeatSeconds = 10
     ManagedUser = $usuarioAdministrado
     RequestToken = $tokenSolicitud

@@ -19,7 +19,7 @@ public sealed class NetworkService : IDisposable
 
     public async Task IniciarAsync(CancellationToken cancelacion)
     {
-        cliente.DefaultRequestHeaders.Add("X-ARES-Key", configuracion.ApiKey);
+        AgregarCredencial(cliente);
 
         while (!cancelacion.IsCancellationRequested)
         {
@@ -53,7 +53,7 @@ public sealed class NetworkService : IDisposable
                     motivoActual = decision.Reason;
                     RestriccionCambiada?.Invoke(decision.Blocked);
                     if (politica.ActualizarAhora)
-                        _ = AgentUpdater.StartAsync(politica.UrlActualizacion, configuracion.ApiKey);
+                        _ = AgentUpdater.StartAsync(politica.UrlActualizacion, configuracion.ApiKey, configuracion.DeviceCredential);
                 }
                 EstadoCambiado?.Invoke("Conectado al servidor remoto", true);
             }
@@ -75,7 +75,7 @@ public sealed class NetworkService : IDisposable
         try
         {
             using var cierre = new HttpClient { Timeout = TimeSpan.FromSeconds(3) };
-            cierre.DefaultRequestHeaders.Add("X-ARES-Key", configuracion.ApiKey);
+            AgregarCredencial(cierre);
             await cierre.PostAsync($"{configuracion.ServerUrl.TrimEnd('/')}/api/agents/{agentId}/closed", null);
         }
         catch { }
@@ -120,4 +120,10 @@ public sealed class NetworkService : IDisposable
     }
 
     public void Dispose() => cliente.Dispose();
+
+    private void AgregarCredencial(HttpClient client)
+    {
+        if (!string.IsNullOrWhiteSpace(configuracion.DeviceCredential)) client.DefaultRequestHeaders.Add("X-ARES-Device", configuracion.DeviceCredential);
+        else client.DefaultRequestHeaders.Add("X-ARES-Key", configuracion.ApiKey);
+    }
 }

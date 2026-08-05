@@ -6,7 +6,7 @@ namespace ARES.Agent;
 internal static class AgentUpdater
 {
     private static int started;
-    public static async Task StartAsync(string url, string apiKey)
+    public static async Task StartAsync(string url, string apiKey, string deviceCredential)
     {
         if (Interlocked.Exchange(ref started, 1) != 0 || string.IsNullOrWhiteSpace(url)) return;
         try
@@ -15,7 +15,8 @@ internal static class AgentUpdater
             if (Directory.Exists(root)) Directory.Delete(root, true); Directory.CreateDirectory(root);
             string zip = Path.Combine(root, "agent.zip");
             using var http = new HttpClient { Timeout = TimeSpan.FromMinutes(3) };
-            http.DefaultRequestHeaders.Add("X-ARES-Key", apiKey);
+            if (!string.IsNullOrWhiteSpace(deviceCredential)) http.DefaultRequestHeaders.Add("X-ARES-Device", deviceCredential);
+            else http.DefaultRequestHeaders.Add("X-ARES-Key", apiKey);
             await File.WriteAllBytesAsync(zip, await http.GetByteArrayAsync(url));
             string extracted = Path.Combine(root, "package"); ZipFile.ExtractToDirectory(zip, extracted);
             string source = Path.Combine(extracted, "app");

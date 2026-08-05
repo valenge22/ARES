@@ -207,6 +207,10 @@ namespace AdministracionEmpleados
                 finally { publicar.Enabled = true; }
             };
             encabezado.Controls.Add(publicar);
+            var vincular = new Button { Text = "Vincular equipo", Dock = DockStyle.Right, Width = 135, FlatStyle = FlatStyle.Flat, BackColor = Color.FromArgb(14, 116, 144), ForeColor = Color.White, Font = new Font("Segoe UI", 9F, FontStyle.Bold), Cursor = Cursors.Hand };
+            vincular.FlatAppearance.BorderSize = 0;
+            vincular.Click += async (_, _) => await MostrarNuevaVinculacionAsync();
+            encabezado.Controls.Add(vincular);
             var tabla = CrearTablaEquipos();
             tabla.Dock = DockStyle.Fill;
             contenedor.Controls.Add(tabla);
@@ -389,6 +393,29 @@ namespace AdministracionEmpleados
             form.AcceptButton = publish;
             if (form.ShowDialog() != DialogResult.OK) return null;
             return Version.TryParse(version.Text.Trim(), out Version? parsed) ? parsed.ToString(3) : null;
+        }
+
+        private async Task MostrarNuevaVinculacionAsync()
+        {
+            using var form = new Form { Text = "Vincular computadora", Width = 430, Height = 330, StartPosition = FormStartPosition.CenterParent, FormBorderStyle = FormBorderStyle.FixedDialog, MaximizeBox = false, MinimizeBox = false };
+            var group = new ComboBox { Width = 190, DropDownStyle = ComboBoxStyle.DropDownList }; group.Items.AddRange(["Grupo 1", "Grupo 2", "Grupo 3"]); group.SelectedIndex = 0;
+            var uses = new NumericUpDown { Minimum = 1, Maximum = 100, Value = 1, Width = 160 };
+            var hours = new NumericUpDown { Minimum = 1, Maximum = 720, Value = 24, Width = 160 };
+            var generate = new Button { Text = "Generar código", Width = 160, Height = 38 };
+            var layout = new FlowLayoutPanel { Location = new Point(30, 24), Width = 350, Height = 260, FlowDirection = FlowDirection.TopDown, WrapContents = false, Controls = { new Label { Text = "Grupo inicial", AutoSize = true }, group, new Label { Text = "Cantidad máxima de equipos", AutoSize = true }, uses, new Label { Text = "Validez en horas", AutoSize = true }, hours, generate } };
+            form.Controls.Add(layout);
+            generate.Click += async (_, _) =>
+            {
+                try
+                {
+                    CreatedDeviceEnrollment result = await discoveryService.CrearVinculacionEquipoAsync((int)uses.Value, (int)hours.Value, group.Text);
+                    Clipboard.SetText(result.Code);
+                    MessageBox.Show($"Código copiado al portapapeles:\n\n{result.Code}\n\nUsalo en el instalador de ARES Agent. Se mostrará completo solamente esta vez.", "ARES", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    form.Close();
+                }
+                catch (Exception ex) { MessageBox.Show(ex.Message, "ARES", MessageBoxButtons.OK, MessageBoxIcon.Error); }
+            };
+            form.ShowDialog(this);
         }
 
         private static string? PedirGrupo(string actual)

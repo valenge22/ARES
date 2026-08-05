@@ -90,14 +90,18 @@ app.Use(async (context, next) =>
         context.Request.Path.Equals("/api/auth/login") ||
         context.Request.Path.Equals("/api/auth/refresh") ||
         context.Request.Path.Equals("/api/auth/register") ||
+        context.Request.Path.Equals("/api/agents/enroll") ||
         context.Request.Path.Equals("/api/auth/recover") ||
         context.Request.Path.Equals("/api/auth/update-password");
     bool validApiKey = context.Request.Headers.TryGetValue("X-ARES-Key", out var supplied) && supplied == apiKey;
+    DeviceIdentity? deviceIdentity = null;
+    if (context.Request.Headers.TryGetValue("X-ARES-Device", out var deviceCredential) && !string.IsNullOrWhiteSpace(deviceCredential))
+        deviceIdentity = await persistence.ValidateDeviceAsync(HashSecret(deviceCredential.ToString()));
     AuthenticatedAdmin? admin = null;
     string authorization = context.Request.Headers.Authorization.ToString();
     if (authorization.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
         admin = await authService.ValidateAsync(authorization[7..].Trim(), context.RequestAborted);
-    if (!publicPath && !validApiKey && admin is null)
+    if (!publicPath && !validApiKey && deviceIdentity is null && admin is null)
     {
         context.Response.StatusCode = StatusCodes.Status401Unauthorized;
         await context.Response.WriteAsJsonAsync(new { error = "Sesión ARES inválida o vencida." });
@@ -109,6 +113,21 @@ app.Use(async (context, next) =>
         await context.Response.WriteAsJsonAsync(new { error = "Tu rol no tiene permiso para realizar esta acción." });
         return;
     }
+    if (deviceIdentity is not null && admin is null && !validApiKey)
+    {
+        string ownAgentPrefix = $"/api/agents/{deviceIdentity.DeviceId}";
+        bool ownAgentRoute = context.Request.Path.Equals($"{ownAgentPrefix}/closed") ||
+            context.Request.Path.Equals($"{ownAgentPrefix}/unlock-request");
+        bool allowedDeviceRoute = context.Request.Path.Equals("/api/agents/heartbeat") ||
+            ownAgentRoute || context.Request.Path.Equals("/api/agents/enroll/cancel") ||
+            context.Request.Path.Equals("/api/update-package/download");
+        if (!allowedDeviceRoute)
+        {
+            context.Response.StatusCode = StatusCodes.Status403Forbidden;
+            await context.Response.WriteAsJsonAsync(new { error = "La credencial del equipo no permite esta operaciÃ³n." });
+            return;
+        }
+    }
     if (admin is not null)
     {
         context.Items["AresAdmin"] = admin;
@@ -116,6 +135,12 @@ app.Use(async (context, next) =>
     }
     else if (validApiKey)
         context.Items["AresOrganizationId"] = AresPersistence.DefaultOrganizationId;
+    else if (deviceIdentity is not null)
+    {
+        context.Items["AresOrganizationId"] = deviceIdentity.OrganizationId;
+        context.Items["AresDeviceId"] = deviceIdentity.DeviceId;
+        context.Items["AresDeviceGroup"] = deviceIdentity.AssignedGroup;
+    }
     await next();
 });
 
@@ -234,6 +259,44 @@ app.MapDelete("/api/admin/invitations/{id:guid}", async (Guid id, HttpContext co
     if (!IsOwner(context)) return Results.Forbid(); await persistence.RevokeInvitationAsync(id, CurrentAdmin(context).OrganizationId); return Results.Ok(new { revoked = true });
 });
 
+app.MapGet("/api/admin/device-enrollments", async (HttpContext context) =>
+    IsOwner(context) ? Results.Ok(await persistence.GetDeviceEnrollmentsAsync(CurrentOrganization(context))) : Results.Forbid());
+app.MapPost("/api/admin/device-enrollments", async (CreateDeviceEnrollmentRequest request, HttpContext context) =>
+{
+    if (!IsOwner(context)) return Results.Forbid();
+    if (request.MaxUses is < 1 or > 1000 || request.DurationHours is < 1 or > 720 ||
+        request.Group is not ("Grupo 1" or "Grupo 2" or "Grupo 3")) return Results.BadRequest(new { error = "Parámetros de vinculación inválidos." });
+    string raw = RandomNumberGenerator.GetHexString(12);
+    string code = $"ARES-PC-{raw[..4]}-{raw[4..8]}-{raw[8..]}";
+    AuthenticatedAdmin admin = CurrentAdmin(context);
+    DeviceEnrollmentInfo info = await persistence.CreateDeviceEnrollmentAsync(admin.OrganizationId, HashSecret(code), code[..12], request.Group,
+        request.MaxUses, DateTimeOffset.UtcNow.AddHours(request.DurationHours), admin.UserId);
+    return Results.Ok(new { code, enrollment = info });
+});
+app.MapDelete("/api/admin/device-enrollments/{id:guid}", async (Guid id, HttpContext context) =>
+{
+    if (!IsOwner(context)) return Results.Forbid();
+    await persistence.RevokeDeviceEnrollmentAsync(id, CurrentOrganization(context)); return Results.Ok(new { revoked = true });
+});
+
+app.MapPost("/api/agents/enroll", async (EnrollDeviceRequest request) =>
+{
+    string deviceId = request.DeviceId?.Trim() ?? ""; string machine = request.MachineName?.Trim() ?? "";
+    if (deviceId.Length is < 8 or > 64 || machine.Length is < 1 or > 100) return Results.BadRequest(new { error = "Identidad del equipo inválida." });
+    string credential = RandomNumberGenerator.GetHexString(32);
+    DeviceEnrollmentGrant? grant = await persistence.EnrollDeviceAsync(HashSecret(request.Code), deviceId, machine, HashSecret(credential));
+    if (grant is null) return Results.Json(new { error = "Código de vinculación inválido, vencido o sin usos disponibles." }, statusCode: 403);
+    return Results.Ok(new { credential, organizationId = grant.OrganizationId, group = grant.AssignedGroup });
+});
+
+app.MapPost("/api/agents/enroll/cancel", async (HttpContext context) =>
+{
+    if (context.Items["AresDeviceId"] is not string deviceId ||
+        !context.Request.Headers.TryGetValue("X-ARES-Device", out var credential)) return Results.Unauthorized();
+    await persistence.CancelDeviceEnrollmentAsync(CurrentOrganization(context), deviceId, HashSecret(credential.ToString()));
+    return Results.Ok(new { cancelled = true });
+});
+
 app.MapPost("/api/control-sessions/heartbeat", async (ControlSessionHeartbeat heartbeat, HttpContext context) =>
 {
     if (string.IsNullOrWhiteSpace(heartbeat.Id)) return Results.BadRequest();
@@ -331,6 +394,8 @@ app.MapPost("/api/agents/heartbeat", async (AgentHeartbeat heartbeat, HttpContex
 {
     if (string.IsNullOrWhiteSpace(heartbeat.Id) || string.IsNullOrWhiteSpace(heartbeat.Equipo))
         return Results.BadRequest(new { error = "Identidad de agente incompleta." });
+    if (context.Items["AresDeviceId"] is string authorizedDevice && !authorizedDevice.Equals(heartbeat.Id, StringComparison.OrdinalIgnoreCase))
+        return Results.Json(new { error = "La credencial no pertenece a este equipo." }, statusCode: 403);
 
     Guid organizationId = CurrentOrganization(context);
     string agentKey = OrganizationKey(organizationId, heartbeat.Id);
@@ -346,6 +411,7 @@ app.MapPost("/api/agents/heartbeat", async (AgentHeartbeat heartbeat, HttpContex
             // en un bloqueo manual permanente cuando el servidor pierde su almacenamiento.
             BloqueadoAdministrativamente = false,
             RequestToken = heartbeat.RequestToken
+            , Grupo = context.Items["AresDeviceGroup"] as string ?? "Grupo 1"
         },
         (_, existente) =>
         {
@@ -808,6 +874,7 @@ List<GroupPolicy> GetPolicies(Guid organizationId) => policiesByOrganization.Get
 bool IsOwner(HttpContext context) => context.Items["AresAdmin"] is AuthenticatedAdmin admin && admin.Role == "Owner";
 bool ValidRole(string role) => role is "Owner" or "Administrator" or "Supervisor" or "Viewer";
 byte[] HashInvitationCode(string? code) => SHA256.HashData(Encoding.UTF8.GetBytes((code ?? "").Trim().ToUpperInvariant()));
+byte[] HashSecret(string? value) => SHA256.HashData(Encoding.UTF8.GetBytes((value ?? "").Trim().ToUpperInvariant()));
 bool CanAccess(string role, string method, PathString path)
 {
     if (role is "Owner" or "Administrator") return true;

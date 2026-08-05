@@ -1,5 +1,9 @@
 using System.Diagnostics;
+using System.Net.Http.Json;
+using System.Security.Cryptography;
 using System.Security.Principal;
+using System.Text;
+using Microsoft.Win32;
 
 namespace ARES.Agent.Setup;
 
@@ -26,7 +30,7 @@ internal sealed class SetupForm : Form
 {
     private const string ServerUrl = "https://ares-3bic.onrender.com";
     private readonly string packageDirectory;
-    private readonly TextBox apiKey = Field(true);
+    private readonly TextBox linkCode = Field();
     private readonly TextBox employee = Field();
     private readonly TextBox employeePassword = Field(true);
     private readonly TextBox employeeConfirmation = Field(true);
@@ -67,7 +71,7 @@ internal sealed class SetupForm : Form
         body.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
 
         AddFull(body, 0, "Cuenta administradora detectada", new TextBox { Text = Environment.UserName, ReadOnly = true, Dock = DockStyle.Top, BackColor = Color.FromArgb(226, 232, 240) });
-        AddFull(body, 1, "Clave compartida de ARES", apiKey);
+        AddFull(body, 1, "Código temporal de vinculación ARES", linkCode);
         AddFull(body, 2, "Nombre de la cuenta del empleado", employee);
         AddPair(body, 3, "Contraseña inicial del empleado", employeePassword, "Confirmar contraseña", employeeConfirmation);
         AddPair(body, 4, "Nueva contraseña privada del administrador", adminPassword, "Confirmar contraseña", adminConfirmation);
@@ -102,6 +106,7 @@ internal sealed class SetupForm : Form
 
     private async Task InstallAsync()
     {
+        EnrollmentResponse? enrollment = null;
         string? validation = ValidateInput();
         if (validation is not null) { ShowError(validation); return; }
         string script = Path.Combine(packageDirectory, "Instalar-ARES-Agent.ps1");
@@ -126,7 +131,8 @@ internal sealed class SetupForm : Form
             if (!useExisting.Checked)
                 start.Environment["ARES_SETUP_EMPLOYEE_PASSWORD"] = employeePassword.Text;
             start.Environment["ARES_SETUP_ADMIN_PASSWORD"] = adminPassword.Text;
-            start.Environment["ARES_SETUP_API_KEY"] = apiKey.Text.Trim();
+            enrollment = await EnrollAsync();
+            start.Environment["ARES_SETUP_DEVICE_CREDENTIAL"] = enrollment.Credential;
 
             using Process process = Process.Start(start) ?? throw new InvalidOperationException("No se pudo iniciar el configurador.");
             Task<string> errorTask = process.StandardError.ReadToEndAsync();
@@ -146,12 +152,16 @@ internal sealed class SetupForm : Form
             DialogResult = DialogResult.OK;
             Close();
         }
-        catch (Exception ex) { ShowError(ex.Message); SetBusy(false, "La instalación no pudo completarse."); }
+        catch (Exception ex)
+        {
+            if (enrollment is not null) await CancelEnrollmentAsync(enrollment.Credential);
+            ShowError(ex.Message); SetBusy(false, "La instalación no pudo completarse.");
+        }
     }
 
     private string? ValidateInput()
     {
-        if (apiKey.Text.Trim().Length < 8) return "Ingresá una clave ARES válida.";
+        if (!linkCode.Text.Trim().StartsWith("ARES-PC-", StringComparison.OrdinalIgnoreCase)) return "Ingresá un código de vinculación ARES válido.";
         string name = employee.Text.Trim();
         if (name.Length is < 1 or > 20 || name.IndexOfAny("\\/[]:;|=,+*?<>@\"".ToCharArray()) >= 0 || name.EndsWith('.')) return "El nombre del empleado no es válido o supera 20 caracteres.";
         if (name.Equals(Environment.UserName, StringComparison.OrdinalIgnoreCase)) return "La cuenta del empleado debe ser diferente de la administradora.";
@@ -168,6 +178,39 @@ internal sealed class SetupForm : Form
         this.busy = busy;
         install.Enabled = !busy; cancel.Enabled = !busy; progress.Visible = busy; status.Text = message;
         UseWaitCursor = busy;
+    }
+
+    private async Task<EnrollmentResponse> EnrollAsync()
+    {
+        using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
+        using HttpResponseMessage response = await http.PostAsJsonAsync($"{ServerUrl}/api/agents/enroll", new
+        {
+            code = linkCode.Text.Trim(), deviceId = DeviceId(), machineName = Environment.MachineName
+        });
+        if (!response.IsSuccessStatusCode)
+        {
+            string detail = await response.Content.ReadAsStringAsync();
+            throw new InvalidOperationException($"No se pudo vincular el equipo. {detail}");
+        }
+        return await response.Content.ReadFromJsonAsync<EnrollmentResponse>() ?? throw new InvalidDataException("El servidor no devolvió la credencial del equipo.");
+    }
+
+    private static async Task CancelEnrollmentAsync(string credential)
+    {
+        try
+        {
+            using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
+            http.DefaultRequestHeaders.Add("X-ARES-Device", credential);
+            using HttpResponseMessage _ = await http.PostAsync($"{ServerUrl}/api/agents/enroll/cancel", null);
+        }
+        catch { /* No ocultar el error original si también falla la recuperación. */ }
+    }
+
+    private static string DeviceId()
+    {
+        string machineGuid = Registry.GetValue(@"HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Cryptography", "MachineGuid", "")?.ToString() ?? "";
+        string source = string.IsNullOrWhiteSpace(machineGuid) ? Environment.MachineName : machineGuid;
+        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(source)))[..24];
     }
     private void ShowError(string message) => MessageBox.Show(message, "ARES", MessageBoxButtons.OK, MessageBoxIcon.Error);
     private void ClearPasswords() { employeePassword.Clear(); employeeConfirmation.Clear(); adminPassword.Clear(); adminConfirmation.Clear(); }
@@ -187,4 +230,11 @@ internal sealed class SetupForm : Form
         panel.Controls.Add(new Label { Text = title, Dock = DockStyle.Top, Height = 24, ForeColor = Color.FromArgb(30, 41, 59) });
         return panel;
     }
+}
+
+internal sealed class EnrollmentResponse
+{
+    public string Credential { get; set; } = "";
+    public Guid OrganizationId { get; set; }
+    public string Group { get; set; } = "Grupo 1";
 }

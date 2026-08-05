@@ -239,4 +239,9 @@ public sealed class AgenteDiscoveryService
     {
         using HttpClient client = CrearCliente(); using HttpResponseMessage response = await client.DeleteAsync($"{AresSettings.Cargar().ServerUrl.TrimEnd('/')}/api/admin/invitations/{id}", cancelacion); response.EnsureSuccessStatusCode();
     }
+    public async Task<CreatedDeviceEnrollment> CrearVinculacionEquipoAsync(int maxUses, int durationHours, string group, CancellationToken cancelacion = default)
+    {
+        using HttpClient client = CrearCliente(); using HttpResponseMessage response = await client.PostAsJsonAsync($"{AresSettings.Cargar().ServerUrl.TrimEnd('/')}/api/admin/device-enrollments", new { maxUses, durationHours, group }, cancelacion); response.EnsureSuccessStatusCode();
+        return await response.Content.ReadFromJsonAsync<CreatedDeviceEnrollment>(cancelacion) ?? throw new InvalidDataException("Respuesta de vinculación inválida.");
+    }
 }

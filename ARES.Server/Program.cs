@@ -341,8 +341,17 @@ app.MapPost("/api/account/mfa/enroll", async (HttpContext context, CancellationT
     string id = value.TryGetProperty("id", out JsonElement idValue) ? idValue.GetString() ?? "" : "";
     JsonElement totp = value.GetProperty("totp");
     string qr = totp.TryGetProperty("qr_code", out JsonElement qrValue) ? qrValue.GetString() ?? "" : "";
-    string image = qr.TrimStart().StartsWith("<svg", StringComparison.OrdinalIgnoreCase)
-        ? $"data:image/svg+xml;charset=utf-8,{Uri.EscapeDataString(qr)}" : qr;
+    string image = qr;
+    int svgStart = qr.IndexOf("<svg", StringComparison.OrdinalIgnoreCase);
+    if (svgStart >= 0)
+    {
+        string svg = qr[svgStart..];
+        image = $"data:image/svg+xml;charset=utf-8,{Uri.EscapeDataString(svg)}";
+    }
+    else if (qr.StartsWith("data:image/svg+xml;utf-8,", StringComparison.OrdinalIgnoreCase))
+    {
+        image = "data:image/svg+xml;charset=utf-8," + qr["data:image/svg+xml;utf-8,".Length..];
+    }
     return Results.Ok(new { id, totp = new {
         qr_code = image,
         secret = totp.TryGetProperty("secret", out JsonElement secret) ? secret.GetString() ?? "" : "",

@@ -218,6 +218,14 @@ app.MapPut("/api/platform/organizations/{id:guid}/license", async (Guid id, Upda
     await persistence.UpdateLicenseAsync(id, plan, status, request.MaxDevices, request.ExpiresAt, request.GraceDays);
     return Results.Ok(new { updated = true });
 });
+app.MapDelete("/api/platform/organizations/{id:guid}", async (Guid id, HttpContext context) =>
+{
+    if (!IsPlatformAdmin(context)) return Results.Forbid();
+    if (id == AresPersistence.DefaultOrganizationId || id == CurrentOrganization(context))
+        return Results.BadRequest(new { error = "No se puede eliminar la organización principal o la organización de tu sesión." });
+    await persistence.ArchiveOrganizationAsync(id);
+    return Results.Ok(new { archived = true });
+});
 
 app.MapPost("/api/auth/register", async (RegisterRequest request, HttpRequest httpRequest, CancellationToken cancellationToken) =>
 {

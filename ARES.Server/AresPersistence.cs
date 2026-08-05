@@ -309,7 +309,7 @@ internal sealed class AresPersistence
             select o.organization_id,o.name,o.slug,o.license_plan,o.license_status,o.trial_ends_at,
                    o.license_expires_at,o.license_grace_days,o.max_devices,
                    (select count(*) from ares_devices d where d.organization_id=o.organization_id and d.enabled=true)
-            from ares_organizations o order by o.created_at desc
+            from ares_organizations o where o.enabled=true order by o.created_at desc
             """;
         await using var reader = await command.ExecuteReaderAsync();
         while (await reader.ReadAsync()) result.Add(ReadLicense(reader));
@@ -330,6 +330,21 @@ internal sealed class AresPersistence
         command.Parameters.Add(new NpgsqlParameter("expires", NpgsqlTypes.NpgsqlDbType.TimestampTz)
             { Value = expiresAt.HasValue ? expiresAt.Value : DBNull.Value });
         command.Parameters.AddWithValue("grace", graceDays); await command.ExecuteNonQueryAsync();
+    }
+
+    public async Task ArchiveOrganizationAsync(Guid organizationId)
+    {
+        await using var connection = new NpgsqlConnection(connectionString); await connection.OpenAsync();
+        await using var transaction = await connection.BeginTransactionAsync();
+        await using var command = connection.CreateCommand(); command.Transaction = transaction;
+        command.Parameters.AddWithValue("id", organizationId);
+        command.CommandText = "update ares_organizations set enabled=false,license_status='Suspended',updated_at=now() where organization_id=@id";
+        await command.ExecuteNonQueryAsync();
+        command.CommandText = "update ares_admin_users set enabled=false,updated_at=now() where organization_id=@id"; await command.ExecuteNonQueryAsync();
+        command.CommandText = "update ares_devices set enabled=false where organization_id=@id"; await command.ExecuteNonQueryAsync();
+        command.CommandText = "update ares_invitation_codes set revoked=true where organization_id=@id"; await command.ExecuteNonQueryAsync();
+        command.CommandText = "update ares_device_enrollment_codes set revoked=true where organization_id=@id"; await command.ExecuteNonQueryAsync();
+        await transaction.CommitAsync();
     }
 
     private static LicenseInfo ReadLicense(NpgsqlDataReader reader) => new(reader.GetGuid(0), reader.GetString(1), reader.GetString(2),

@@ -19,6 +19,11 @@ await persistence.EnsureOwnerAsync(
     builder.Configuration["ARES_OWNER_USER_ID"] ?? Environment.GetEnvironmentVariable("ARES_OWNER_USER_ID"),
     builder.Configuration["ARES_OWNER_NAME"] ?? Environment.GetEnvironmentVariable("ARES_OWNER_NAME"));
 var authService = new AresAuthService(builder.Configuration, persistence);
+string platformAdminUserId = builder.Configuration["ARES_PLATFORM_ADMIN_USER_ID"]
+    ?? Environment.GetEnvironmentVariable("ARES_PLATFORM_ADMIN_USER_ID")
+    ?? builder.Configuration["ARES_OWNER_USER_ID"]
+    ?? Environment.GetEnvironmentVariable("ARES_OWNER_USER_ID")
+    ?? "";
 
 string apiKey = builder.Configuration["ARES_API_KEY"]
     ?? Environment.GetEnvironmentVariable("ARES_API_KEY")
@@ -196,6 +201,23 @@ app.MapPut("/api/organization", async (UpdateOrganizationRequest request, HttpCo
     await persistence.UpdateOrganizationNameAsync(CurrentOrganization(context), name);
     return Results.Ok(new { updated = true, name });
 });
+app.MapGet("/api/license", async (HttpContext context) =>
+{
+    LicenseInfo? license = await persistence.GetLicenseAsync(CurrentOrganization(context));
+    return license is null ? Results.NotFound() : Results.Ok(new { license, canManagePlatform = IsPlatformAdmin(context) });
+});
+app.MapGet("/api/platform/organizations", async (HttpContext context) =>
+    IsPlatformAdmin(context) ? Results.Ok(await persistence.GetLicensesAsync()) : Results.Forbid());
+app.MapPut("/api/platform/organizations/{id:guid}/license", async (Guid id, UpdateLicenseRequest request, HttpContext context) =>
+{
+    if (!IsPlatformAdmin(context)) return Results.Forbid();
+    string plan = request.Plan?.Trim() ?? ""; string status = request.Status?.Trim() ?? "";
+    if (plan is not ("Trial" or "Basic" or "Professional" or "Enterprise") || status is not ("Active" or "Suspended") ||
+        request.MaxDevices is < 1 or > 100000 || request.GraceDays is < 0 or > 30)
+        return Results.BadRequest(new { error = "Configuración de licencia inválida." });
+    await persistence.UpdateLicenseAsync(id, plan, status, request.MaxDevices, request.ExpiresAt, request.GraceDays);
+    return Results.Ok(new { updated = true });
+});
 
 app.MapPost("/api/auth/register", async (RegisterRequest request, HttpRequest httpRequest, CancellationToken cancellationToken) =>
 {
@@ -313,6 +335,12 @@ app.MapGet("/api/admin/device-enrollments", async (HttpContext context) =>
 app.MapPost("/api/admin/device-enrollments", async (CreateDeviceEnrollmentRequest request, HttpContext context) =>
 {
     if (!IsAdministrator(context)) return Results.Forbid();
+    LicenseInfo? license = await persistence.GetLicenseAsync(CurrentOrganization(context));
+    DateTimeOffset? licenseEnd = license?.Plan == "Trial" ? license.TrialEndsAt : license?.ExpiresAt;
+    if (license is null || license.Status != "Active" || (licenseEnd.HasValue && DateTimeOffset.UtcNow > licenseEnd.Value.AddDays(license.GraceDays)))
+        return Results.Json(new { error = "La licencia está vencida o suspendida." }, statusCode: 402);
+    if (license.UsedDevices >= license.MaxDevices)
+        return Results.Json(new { error = $"Se alcanzó el límite de {license.MaxDevices} equipos de la licencia." }, statusCode: 402);
     string requestedGroup = request.Group?.Trim() ?? "";
     if (request.MaxUses is < 1 or > 1000 || request.DurationHours is < 1 or > 720 ||
         !GetPolicies(CurrentOrganization(context)).Any(x => x.Grupo.Equals(requestedGroup, StringComparison.OrdinalIgnoreCase)))
@@ -970,6 +998,8 @@ List<GroupPolicy> GetPolicies(Guid organizationId)
 }
 bool IsOwner(HttpContext context) => context.Items["AresAdmin"] is AuthenticatedAdmin admin && admin.Role == "Owner";
 bool IsAdministrator(HttpContext context) => context.Items["AresAdmin"] is AuthenticatedAdmin admin && admin.Role is "Owner" or "Administrator";
+bool IsPlatformAdmin(HttpContext context) => context.Items["AresAdmin"] is AuthenticatedAdmin admin &&
+    !string.IsNullOrWhiteSpace(platformAdminUserId) && admin.UserId.ToString().Equals(platformAdminUserId, StringComparison.OrdinalIgnoreCase);
 bool ValidRole(string role) => role is "Owner" or "Administrator" or "Operator" or "Viewer";
 byte[] HashInvitationCode(string? code) => SHA256.HashData(Encoding.UTF8.GetBytes((code ?? "").Trim().ToUpperInvariant()));
 byte[] HashSecret(string? value) => SHA256.HashData(Encoding.UTF8.GetBytes((value ?? "").Trim().ToUpperInvariant()));

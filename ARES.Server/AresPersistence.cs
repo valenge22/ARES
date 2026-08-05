@@ -64,6 +64,14 @@ internal sealed class AresPersistence
             values ('00000000-0000-0000-0000-000000000001','Organización principal','principal')
             on conflict (organization_id) do nothing;
             alter table ares_organizations add column if not exists onboarding_completed boolean not null default false;
+            alter table ares_organizations add column if not exists license_plan varchar(30) not null default 'Trial';
+            alter table ares_organizations add column if not exists license_status varchar(20) not null default 'Active';
+            alter table ares_organizations add column if not exists trial_ends_at timestamptz not null default (now() + interval '30 days');
+            alter table ares_organizations add column if not exists license_expires_at timestamptz;
+            alter table ares_organizations add column if not exists license_grace_days integer not null default 3;
+            alter table ares_organizations add column if not exists max_devices integer not null default 5;
+            update ares_organizations set license_plan='Enterprise',license_status='Active',license_expires_at=null,max_devices=100000
+            where organization_id='00000000-0000-0000-0000-000000000001';
             update ares_organizations set onboarding_completed=true where organization_id='00000000-0000-0000-0000-000000000001';
 
             create table if not exists ares_state (
@@ -276,6 +284,57 @@ internal sealed class AresPersistence
         command.Parameters.AddWithValue("id", organizationId); command.Parameters.AddWithValue("name", name);
         await command.ExecuteNonQueryAsync();
     }
+
+    public async Task<LicenseInfo?> GetLicenseAsync(Guid organizationId)
+    {
+        await using var connection = new NpgsqlConnection(connectionString); await connection.OpenAsync();
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            select o.organization_id,o.name,o.slug,o.license_plan,o.license_status,o.trial_ends_at,
+                   o.license_expires_at,o.license_grace_days,o.max_devices,
+                   (select count(*) from ares_devices d where d.organization_id=o.organization_id and d.enabled=true)
+            from ares_organizations o where o.organization_id=@id
+            """;
+        command.Parameters.AddWithValue("id", organizationId);
+        await using var reader = await command.ExecuteReaderAsync();
+        return await reader.ReadAsync() ? ReadLicense(reader) : null;
+    }
+
+    public async Task<List<LicenseInfo>> GetLicensesAsync()
+    {
+        var result = new List<LicenseInfo>();
+        await using var connection = new NpgsqlConnection(connectionString); await connection.OpenAsync();
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            select o.organization_id,o.name,o.slug,o.license_plan,o.license_status,o.trial_ends_at,
+                   o.license_expires_at,o.license_grace_days,o.max_devices,
+                   (select count(*) from ares_devices d where d.organization_id=o.organization_id and d.enabled=true)
+            from ares_organizations o order by o.created_at desc
+            """;
+        await using var reader = await command.ExecuteReaderAsync();
+        while (await reader.ReadAsync()) result.Add(ReadLicense(reader));
+        return result;
+    }
+
+    public async Task UpdateLicenseAsync(Guid organizationId, string plan, string status, int maxDevices, DateTimeOffset? expiresAt, int graceDays)
+    {
+        await using var connection = new NpgsqlConnection(connectionString); await connection.OpenAsync();
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            update ares_organizations set license_plan=@plan,license_status=@status,max_devices=@max,
+                license_expires_at=@expires,license_grace_days=@grace,updated_at=now()
+            where organization_id=@id
+            """;
+        command.Parameters.AddWithValue("id", organizationId); command.Parameters.AddWithValue("plan", plan);
+        command.Parameters.AddWithValue("status", status); command.Parameters.AddWithValue("max", maxDevices);
+        command.Parameters.Add(new NpgsqlParameter("expires", NpgsqlTypes.NpgsqlDbType.TimestampTz)
+            { Value = expiresAt.HasValue ? expiresAt.Value : DBNull.Value });
+        command.Parameters.AddWithValue("grace", graceDays); await command.ExecuteNonQueryAsync();
+    }
+
+    private static LicenseInfo ReadLicense(NpgsqlDataReader reader) => new(reader.GetGuid(0), reader.GetString(1), reader.GetString(2),
+        reader.GetString(3), reader.GetString(4), reader.GetFieldValue<DateTimeOffset>(5), reader.IsDBNull(6) ? null : reader.GetFieldValue<DateTimeOffset>(6),
+        reader.GetInt32(7), reader.GetInt32(8), reader.GetInt64(9));
 
     public async Task<List<Guid>> GetOrganizationIdsAsync()
     {
@@ -498,6 +557,24 @@ internal sealed class AresPersistence
         }
         command.Parameters.Clear();
         command.CommandText = """
+            select license_status,
+                   case when license_plan='Trial' then trial_ends_at else license_expires_at end,
+                   license_grace_days,max_devices,
+                   (select count(*) from ares_devices where organization_id=@organization and enabled=true and device_id<>@device)
+            from ares_organizations where organization_id=@organization and enabled=true
+            """;
+        command.Parameters.AddWithValue("organization", organizationId); command.Parameters.AddWithValue("device", deviceId);
+        await using (var licenseReader = await command.ExecuteReaderAsync())
+        {
+            if (!await licenseReader.ReadAsync()) { await transaction.RollbackAsync(); return null; }
+            string status = licenseReader.GetString(0);
+            DateTimeOffset? expires = licenseReader.IsDBNull(1) ? null : licenseReader.GetFieldValue<DateTimeOffset>(1);
+            int graceDays = licenseReader.GetInt32(2); int maxDevices = licenseReader.GetInt32(3); long used = licenseReader.GetInt64(4);
+            if (status != "Active" || (expires.HasValue && DateTimeOffset.UtcNow > expires.Value.AddDays(graceDays)) || used >= maxDevices)
+            { await transaction.RollbackAsync(); return null; }
+        }
+        command.Parameters.Clear();
+        command.CommandText = """
             insert into ares_devices(organization_id,device_id,machine_name,assigned_group,credential_hash,enabled,enrollment_id,enrolled_at,last_seen_at)
             values(@organization,@device,@machine,@group,@credential,true,@enrollment,now(),now())
             on conflict(organization_id,device_id) do update set machine_name=excluded.machine_name,
@@ -627,5 +704,7 @@ internal sealed record InvitationGrant(Guid InvitationId, Guid OrganizationId, s
 internal sealed record DeviceEnrollmentInfo(Guid EnrollmentId, string CodePrefix, string AssignedGroup, int MaxUses, int UsedCount, DateTimeOffset ExpiresAt, bool Revoked, DateTimeOffset CreatedAt);
 internal sealed record DeviceEnrollmentGrant(Guid EnrollmentId, Guid OrganizationId, string AssignedGroup);
 internal sealed record DeviceIdentity(Guid OrganizationId, string DeviceId, string AssignedGroup);
+internal sealed record LicenseInfo(Guid OrganizationId, string OrganizationName, string Slug, string Plan, string Status,
+    DateTimeOffset TrialEndsAt, DateTimeOffset? ExpiresAt, int GraceDays, int MaxDevices, long UsedDevices);
 internal sealed record RegistrationRequestInfo(Guid UserId, string Email, string DisplayName, string Status, DateTimeOffset RequestedAt, DateTimeOffset? ReviewedAt);
 internal sealed record InvitationInfo(Guid InvitationId, string CodePrefix, int MaxUses, int UsedCount, DateTimeOffset ExpiresAt, bool Revoked, DateTimeOffset CreatedAt);

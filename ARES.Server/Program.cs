@@ -82,7 +82,8 @@ foreach (AgentAuditEvent evento in await LoadStateAsync("audit", auditPath, new 
 
 app.Use(async (context, next) =>
 {
-    bool publicPath = context.Request.Path.StartsWithSegments("/health") ||
+    bool publicPath = context.Request.Path.Equals("/") ||
+        context.Request.Path.StartsWithSegments("/health") ||
         context.Request.Path.StartsWithSegments("/solicitar") ||
         context.Request.Path.StartsWithSegments("/auth") ||
         context.Request.Path.Equals("/api/auth/login") ||
@@ -153,6 +154,17 @@ app.MapGet("/health", () => Results.Ok(new
     storage = persistence.UsesDatabase ? "postgresql" : "json",
     authentication = authService.IsConfigured ? "configured" : "missing"
 }));
+
+app.MapGet("/", () => Results.Content("""
+    <!doctype html><html lang="es"><meta charset="utf-8"><meta name="viewport" content="width=device-width">
+    <title>ARES · Cuenta confirmada</title><style>
+    body{margin:0;font:16px Segoe UI,Arial;background:#0b2340;color:white;display:grid;place-items:center;min-height:100vh}
+    main{width:min(430px,85vw);background:#0f3158;padding:38px;border-radius:18px;text-align:center;box-shadow:0 18px 45px #06182c}
+    .shield{font-size:42px;color:#38bdf8}h1{color:#7dd3fc;margin:8px}p{line-height:1.5;color:#dbeafe}
+    </style><main><div class="shield">◈</div><h1>ARES</h1><h2>Correo confirmado</h2>
+    <p id="message">Ya podés cerrar esta página, volver al Centro de Control e iniciar sesión.</p></main>
+    <script>const p=new URLSearchParams(location.hash.slice(1));if(p.get('error')){document.querySelector('h2').textContent='El enlace no es válido';document.getElementById('message').textContent=p.get('error_description')||'Solicitá un correo de confirmación nuevo.'}</script></html>
+    """, "text/html; charset=utf-8"));
 
 app.MapPost("/api/auth/login", async (LoginRequest request, CancellationToken cancellationToken) =>
 {

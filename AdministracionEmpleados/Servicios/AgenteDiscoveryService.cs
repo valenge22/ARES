@@ -112,7 +112,12 @@ public sealed class AgenteDiscoveryService
     {
         using HttpClient cliente = CrearCliente();
         using HttpResponseMessage response = await cliente.PutAsJsonAsync($"{AresSettings.Cargar().ServerUrl.TrimEnd('/')}/api/group-policies", new GroupPoliciesRequest { Grupos = policies }, cancelacion);
-        response.EnsureSuccessStatusCode();
+        if (!response.IsSuccessStatusCode)
+        {
+            string detail = await response.Content.ReadAsStringAsync(cancelacion);
+            try { detail = JsonDocument.Parse(detail).RootElement.GetProperty("error").GetString() ?? detail; } catch { }
+            throw new InvalidOperationException(string.IsNullOrWhiteSpace(detail) ? $"No se pudieron guardar los grupos ({(int)response.StatusCode})." : detail);
+        }
     }
 
     public async Task<List<ScheduleRevision>> ObtenerHistorialHorariosAsync(CancellationToken cancelacion = default)

@@ -85,7 +85,13 @@ internal sealed class AresApiClient
     public async Task SaveGroupPoliciesAsync(List<GroupPolicy> groups)
     {
         using var request = Request(HttpMethod.Put, "/api/group-policies"); request.Content = JsonContent.Create(new GroupPoliciesRequest { Grupos = groups });
-        using var response = await http.SendAsync(request); response.EnsureSuccessStatusCode();
+        using var response = await http.SendAsync(request);
+        if (!response.IsSuccessStatusCode)
+        {
+            string detail = await response.Content.ReadAsStringAsync();
+            try { detail = System.Text.Json.JsonDocument.Parse(detail).RootElement.GetProperty("error").GetString() ?? detail; } catch { }
+            throw new InvalidOperationException(string.IsNullOrWhiteSpace(detail) ? $"No se pudieron guardar los grupos ({(int)response.StatusCode})." : detail);
+        }
     }
     public async Task OverrideAsync(string id, DateTimeOffset untilUtc)
     {

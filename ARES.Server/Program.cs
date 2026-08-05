@@ -958,8 +958,15 @@ string OrganizationKey(Guid organizationId, string id) => $"{organizationId:N}:{
 AgentStatus? FindAgent(HttpContext context, string id) => agents.TryGetValue(OrganizationKey(CurrentOrganization(context), id), out AgentStatus? agent) ? agent : null;
 ScheduleState GetSchedule(Guid organizationId) => schedules.GetOrAdd(organizationId, _ => new ScheduleState());
 List<ScheduleRevision> GetScheduleHistory(Guid organizationId) => scheduleHistories.GetOrAdd(organizationId, _ => []);
-List<GroupPolicy> GetPolicies(Guid organizationId) => policiesByOrganization.GetOrAdd(organizationId, _ =>
-    [new() { Grupo = "General" }]);
+List<GroupPolicy> GetPolicies(Guid organizationId)
+{
+    List<GroupPolicy> policies = policiesByOrganization.GetOrAdd(organizationId, _ => [new() { Grupo = "General" }]);
+    foreach (string assignedGroup in agents.Values.Where(x => x.OrganizationId == organizationId && !string.IsNullOrWhiteSpace(x.Grupo))
+                 .Select(x => x.Grupo.Trim()).Distinct(StringComparer.OrdinalIgnoreCase))
+        if (!policies.Any(x => x.Grupo.Equals(assignedGroup, StringComparison.OrdinalIgnoreCase)))
+            policies.Add(new GroupPolicy { Grupo = assignedGroup });
+    return policies;
+}
 bool IsOwner(HttpContext context) => context.Items["AresAdmin"] is AuthenticatedAdmin admin && admin.Role == "Owner";
 bool ValidRole(string role) => role is "Owner" or "Administrator" or "Supervisor" or "Viewer";
 byte[] HashInvitationCode(string? code) => SHA256.HashData(Encoding.UTF8.GetBytes((code ?? "").Trim().ToUpperInvariant()));

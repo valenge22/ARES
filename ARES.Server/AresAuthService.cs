@@ -32,6 +32,7 @@ internal sealed class AresAuthService
         if (!response.IsSuccessStatusCode) return null;
         using JsonDocument document = JsonDocument.Parse(await response.Content.ReadAsStringAsync(cancellationToken));
         if (!document.RootElement.TryGetProperty("id", out JsonElement idElement) || !Guid.TryParse(idElement.GetString(), out Guid id)) return null;
+        if (VerifiedFactorId(document.RootElement) is not null && ReadAal(accessToken) != "aal2") return null;
         AdminUser? admin = await persistence.GetAdminAsync(id);
         if (admin is null || !admin.Enabled) return null;
         string email = document.RootElement.TryGetProperty("email", out JsonElement item) ? item.GetString() ?? "" : "";
@@ -99,8 +100,77 @@ internal sealed class AresAuthService
         AdminUser? admin = await persistence.GetAdminAsync(userId);
         if (admin is null || !admin.Enabled) return null;
         await persistence.UpdateAdminEmailAsync(admin.UserId, token.User.Email ?? "");
+        string? factorId = await GetVerifiedFactorIdAsync(token.AccessToken, cancellationToken);
+        bool mfaRequired = factorId is not null && ReadAal(token.AccessToken) != "aal2";
         return new(token.AccessToken, token.RefreshToken, token.ExpiresIn,
-            new(admin.UserId, admin.OrganizationId, token.User.Email ?? admin.Email, admin.DisplayName, admin.Role));
+            new(admin.UserId, admin.OrganizationId, token.User.Email ?? admin.Email, admin.DisplayName, admin.Role), mfaRequired, factorId ?? "");
+    }
+
+    public async Task<JsonElement?> EnrollMfaAsync(string accessToken, CancellationToken cancellationToken)
+        => await MfaJsonAsync(HttpMethod.Post, "/auth/v1/factors", accessToken, new { factor_type = "totp", friendly_name = "ARES Authenticator" }, cancellationToken);
+
+    public async Task<JsonElement?> ListMfaAsync(string accessToken, CancellationToken cancellationToken)
+        => await MfaJsonAsync(HttpMethod.Get, "/auth/v1/user", accessToken, null, cancellationToken);
+
+    public async Task<AuthResult?> VerifyMfaAsync(string accessToken, string factorId, string code, CancellationToken cancellationToken)
+    {
+        JsonElement? challenge = await MfaJsonAsync(HttpMethod.Post, $"/auth/v1/factors/{Uri.EscapeDataString(factorId)}/challenge", accessToken, new { }, cancellationToken);
+        if (!challenge.HasValue || !challenge.Value.TryGetProperty("id", out JsonElement challengeId)) return null;
+        JsonElement? verified = await MfaJsonAsync(HttpMethod.Post, $"/auth/v1/factors/{Uri.EscapeDataString(factorId)}/verify", accessToken,
+            new { challenge_id = challengeId.GetString(), code }, cancellationToken);
+        if (!verified.HasValue) return null;
+        AuthTokenPayload? token = verified.Value.Deserialize<AuthTokenPayload>();
+        if (token is null || string.IsNullOrWhiteSpace(token.AccessToken)) return null;
+        if (token.User is null)
+        {
+            using var userRequest = CreateRequest(HttpMethod.Get, "/auth/v1/user"); userRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token.AccessToken);
+            using HttpResponseMessage userResponse = await http.SendAsync(userRequest, cancellationToken);
+            if (!userResponse.IsSuccessStatusCode) return null;
+            token.User = await userResponse.Content.ReadFromJsonAsync<AuthUser>(cancellationToken);
+        }
+        if (token.User is null || !Guid.TryParse(token.User.Id, out Guid userId)) return null;
+        AdminUser? admin = await persistence.GetAdminAsync(userId); if (admin is null || !admin.Enabled) return null;
+        return new(token.AccessToken, token.RefreshToken, token.ExpiresIn,
+            new(admin.UserId, admin.OrganizationId, token.User.Email ?? admin.Email, admin.DisplayName, admin.Role), false, "");
+    }
+
+    public async Task<bool> UnenrollMfaAsync(string accessToken, string factorId, CancellationToken cancellationToken)
+        => (await MfaJsonAsync(HttpMethod.Delete, $"/auth/v1/factors/{Uri.EscapeDataString(factorId)}", accessToken, null, cancellationToken)).HasValue;
+
+    private async Task<string?> GetVerifiedFactorIdAsync(string accessToken, CancellationToken cancellationToken)
+    {
+        using var request = CreateRequest(HttpMethod.Get, "/auth/v1/user"); request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
+        using HttpResponseMessage response = await http.SendAsync(request, cancellationToken); if (!response.IsSuccessStatusCode) return null;
+        using JsonDocument document = JsonDocument.Parse(await response.Content.ReadAsStringAsync(cancellationToken));
+        return VerifiedFactorId(document.RootElement);
+    }
+
+    private async Task<JsonElement?> MfaJsonAsync(HttpMethod method, string path, string accessToken, object? body, CancellationToken cancellationToken)
+    {
+        using var request = CreateRequest(method, path); request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
+        if (body is not null) request.Content = JsonContent.Create(body);
+        using HttpResponseMessage response = await http.SendAsync(request, cancellationToken); if (!response.IsSuccessStatusCode) return null;
+        using JsonDocument document = JsonDocument.Parse(await response.Content.ReadAsStringAsync(cancellationToken)); return document.RootElement.Clone();
+    }
+
+    private static string? VerifiedFactorId(JsonElement user)
+    {
+        if (!user.TryGetProperty("factors", out JsonElement factors) || factors.ValueKind != JsonValueKind.Array) return null;
+        foreach (JsonElement factor in factors.EnumerateArray())
+            if (factor.TryGetProperty("status", out JsonElement status) && status.GetString() == "verified" &&
+                factor.TryGetProperty("factor_type", out JsonElement type) && type.GetString() == "totp" && factor.TryGetProperty("id", out JsonElement id)) return id.GetString();
+        return null;
+    }
+
+    private static string ReadAal(string jwt)
+    {
+        try
+        {
+            string part = jwt.Split('.')[1].Replace('-', '+').Replace('_', '/'); part = part.PadRight((part.Length + 3) / 4 * 4, '=');
+            using JsonDocument document = JsonDocument.Parse(Convert.FromBase64String(part));
+            return document.RootElement.TryGetProperty("aal", out JsonElement aal) ? aal.GetString() ?? "aal1" : "aal1";
+        }
+        catch { return "aal1"; }
     }
 
     private HttpRequestMessage CreateRequest(HttpMethod method, string path)
@@ -118,20 +188,23 @@ internal sealed class AresAuthService
         public string RefreshToken { get; set; } = "";
         [JsonPropertyName("expires_in")]
         public int ExpiresIn { get; set; }
+        [JsonPropertyName("user")]
         public AuthUser? User { get; set; }
     }
-    private sealed class AuthUser { public string Id { get; set; } = ""; public string? Email { get; set; } }
+    private sealed class AuthUser { [JsonPropertyName("id")] public string Id { get; set; } = ""; [JsonPropertyName("email")] public string? Email { get; set; } }
 }
 
 internal sealed record AuthenticatedAdmin(Guid UserId, Guid OrganizationId, string Email, string DisplayName, string Role);
 internal sealed record SignUpResult(Guid? UserId, string ErrorCode, string ErrorMessage);
-internal sealed record AuthResult(string AccessToken, string RefreshToken, int ExpiresIn, AuthenticatedAdmin User);
+internal sealed record AuthResult(string AccessToken, string RefreshToken, int ExpiresIn, AuthenticatedAdmin User, bool MfaRequired = false, string FactorId = "");
 internal sealed record LoginRequest(string Email, string Password);
 internal sealed record RefreshRequest(string RefreshToken);
 internal sealed record RegisterRequest(string DisplayName, string Email, string Password, string InvitationCode, string OrganizationName);
 internal sealed record RecoverRequest(string Email);
 internal sealed record UpdatePasswordRequest(string AccessToken, string Password);
 internal sealed record ChangePasswordRequest(string Password);
+internal sealed record MfaVerifyRequest(string AccessToken, string FactorId, string Code);
+internal sealed record MfaFactorRequest(string FactorId);
 internal sealed record ApproveRegistrationRequest(string Role);
 internal sealed record UpdateAdminRequest(string Role, bool Enabled);
 internal sealed record CreateInvitationRequest(int MaxUses, int DurationHours, string Role = "Operator");

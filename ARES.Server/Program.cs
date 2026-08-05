@@ -38,8 +38,8 @@ string updateVersionPath = Path.Combine(AppContext.BaseDirectory, "data", "agent
 string controlSessionsPath = Path.Combine(AppContext.BaseDirectory, "data", "control-sessions.json");
 string controlWindowsPackagePath = Path.Combine(AppContext.BaseDirectory, "data", "control-windows-update.zip");
 string controlMacPackagePath = Path.Combine(AppContext.BaseDirectory, "data", "control-macos-update.pkg");
-string latestWindowsControlVersion = "1.6.3";
-string latestMacControlVersion = "1.5.1";
+string latestWindowsControlVersion = "1.6.4";
+string latestMacControlVersion = "1.5.2";
 Directory.CreateDirectory(Path.GetDirectoryName(dataPath)!);
 
 var agents = new ConcurrentDictionary<string, AgentStatus>(StringComparer.OrdinalIgnoreCase);
@@ -99,6 +99,7 @@ app.Use(async (context, next) =>
         context.Request.Path.Equals("/api/agents/enroll") ||
         context.Request.Path.Equals("/api/auth/recover") ||
         context.Request.Path.Equals("/api/auth/update-password");
+    publicPath = publicPath || context.Request.Path.Equals("/api/auth/mfa/verify");
     bool validApiKey = context.Request.Headers.TryGetValue("X-ARES-Key", out var supplied) && supplied == apiKey;
     DeviceIdentity? deviceIdentity = null;
     if (context.Request.Headers.TryGetValue("X-ARES-Device", out var deviceCredential) && !string.IsNullOrWhiteSpace(deviceCredential))
@@ -179,7 +180,8 @@ app.MapPost("/api/auth/login", async (LoginRequest request, HttpContext context,
     AdminUser? knownUser = result is null ? await persistence.GetAdminByEmailAsync(request.Email.Trim()) : null;
     await persistence.RecordLoginAsync(result?.User.UserId ?? knownUser?.UserId, result?.User.OrganizationId ?? knownUser?.OrganizationId, request.Email.Trim(), client, ip, result is not null);
     if (result is null) return Results.Json(new { error = "Correo, contraseña o permisos inválidos." }, statusCode: 401);
-    await persistence.RegisterAuthSessionAsync(result.User.UserId, result.User.OrganizationId, HashToken(result.AccessToken), HashToken(result.RefreshToken), client, ip);
+    if (!result.MfaRequired)
+        await persistence.RegisterAuthSessionAsync(result.User.UserId, result.User.OrganizationId, HashToken(result.AccessToken), HashToken(result.RefreshToken), client, ip);
     return Results.Ok(result);
 });
 
@@ -306,6 +308,32 @@ app.MapDelete("/api/account/sessions/{id:guid}", async (Guid id, HttpContext con
     await persistence.RevokeAuthSessionAsync(CurrentAdmin(context).UserId, id); return Results.Ok(new { revoked = true });
 });
 app.MapGet("/api/account/login-events", async (HttpContext context) => Results.Ok(await persistence.GetLoginEventsAsync(CurrentAdmin(context).UserId)));
+app.MapPost("/api/auth/mfa/verify", async (MfaVerifyRequest request, HttpContext context, CancellationToken cancellationToken) =>
+{
+    AuthResult? result = await authService.VerifyMfaAsync(request.AccessToken, request.FactorId, request.Code, cancellationToken);
+    if (result is null) return Results.BadRequest(new { error = "El código de verificación no es válido." });
+    await persistence.RegisterAuthSessionAsync(result.User.UserId, result.User.OrganizationId, HashToken(result.AccessToken), HashToken(result.RefreshToken), ClientName(context), ClientIp(context));
+    return Results.Ok(result);
+});
+app.MapGet("/api/account/mfa", async (HttpContext context, CancellationToken cancellationToken) =>
+{
+    string token = BearerToken(context); JsonElement? result = await authService.ListMfaAsync(token, cancellationToken);
+    return result.HasValue ? Results.Json(result.Value) : Results.BadRequest(new { error = "No se pudo consultar el segundo factor." });
+});
+app.MapPost("/api/account/mfa/enroll", async (HttpContext context, CancellationToken cancellationToken) =>
+{
+    JsonElement? result = await authService.EnrollMfaAsync(BearerToken(context), cancellationToken);
+    return result.HasValue ? Results.Json(result.Value) : Results.BadRequest(new { error = "No se pudo iniciar la configuración 2FA." });
+});
+app.MapPost("/api/account/mfa/verify", async (MfaVerifyRequest request, HttpContext context, CancellationToken cancellationToken) =>
+{
+    AuthResult? result = await authService.VerifyMfaAsync(BearerToken(context), request.FactorId, request.Code, cancellationToken);
+    if (result is null) return Results.BadRequest(new { error = "El código de verificación no es válido." });
+    await persistence.RegisterAuthSessionAsync(result.User.UserId, result.User.OrganizationId, HashToken(result.AccessToken), HashToken(result.RefreshToken), ClientName(context), ClientIp(context));
+    return Results.Ok(result);
+});
+app.MapDelete("/api/account/mfa/{factorId}", async (string factorId, HttpContext context, CancellationToken cancellationToken) =>
+    await authService.UnenrollMfaAsync(BearerToken(context), factorId, cancellationToken) ? Results.Ok(new { removed = true }) : Results.BadRequest(new { error = "No se pudo desactivar 2FA." }));
 
 app.MapGet("/auth/confirmed", () => Results.Content("""
     <!doctype html><html lang="es"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>ARES</title>
@@ -1044,6 +1072,7 @@ string ClientIp(HttpContext context) => context.Request.Headers["X-Forwarded-For
     ?? context.Connection.RemoteIpAddress?.ToString() ?? "Desconocida";
 string ClientName(HttpContext context) => string.IsNullOrWhiteSpace(context.Request.Headers.UserAgent)
     ? "ARES Centro de Control" : context.Request.Headers.UserAgent.ToString();
+string BearerToken(HttpContext context) => context.Request.Headers.Authorization.ToString().Replace("Bearer ", "", StringComparison.OrdinalIgnoreCase).Trim();
 bool CanAccess(string role, string method, PathString path)
 {
     if (role is "Owner" or "Administrator") return true;

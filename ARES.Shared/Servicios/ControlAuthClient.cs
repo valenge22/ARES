@@ -19,6 +19,9 @@ public sealed class ControlAuthClient
     private DateTimeOffset expiresUtc;
     public AuthenticatedControlUser? User { get; private set; }
     public bool IsSignedIn => User is not null;
+    public bool MfaRequired { get; private set; }
+    private string pendingMfaAccessToken = "";
+    private string pendingMfaFactorId = "";
 
     public ControlAuthClient(Func<string> serverUrl, IRefreshTokenStore tokenStore)
     {
@@ -40,7 +43,22 @@ public sealed class ControlAuthClient
             new { email, password }, cancellationToken);
         if (!response.IsSuccessStatusCode) return false;
         AuthResponse? auth = await response.Content.ReadFromJsonAsync<AuthResponse>(cancellationToken);
+        if (auth?.MfaRequired == true)
+        {
+            MfaRequired = true; pendingMfaAccessToken = auth.AccessToken; pendingMfaFactorId = auth.FactorId;
+            return false;
+        }
         return Apply(auth);
+    }
+
+    public async Task<bool> CompleteMfaAsync(string code, CancellationToken cancellationToken = default)
+    {
+        if (!MfaRequired || string.IsNullOrWhiteSpace(pendingMfaAccessToken) || string.IsNullOrWhiteSpace(pendingMfaFactorId)) return false;
+        using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
+        using HttpResponseMessage response = await http.PostAsJsonAsync($"{serverUrl().TrimEnd('/')}/api/auth/mfa/verify",
+            new { accessToken = pendingMfaAccessToken, factorId = pendingMfaFactorId, code = code.Trim() }, cancellationToken);
+        if (!response.IsSuccessStatusCode) return false;
+        return Apply(await response.Content.ReadFromJsonAsync<AuthResponse>(cancellationToken));
     }
 
     public async Task<(bool Success, string Message)> RegisterAsync(string name, string email, string password, string invitationCode, string organizationName = "", CancellationToken cancellationToken = default)
@@ -76,7 +94,7 @@ public sealed class ControlAuthClient
 
     public void Logout()
     {
-        accessToken = ""; expiresUtc = default; User = null; tokenStore.Delete();
+        accessToken = ""; expiresUtc = default; User = null; MfaRequired = false; pendingMfaAccessToken = ""; pendingMfaFactorId = ""; tokenStore.Delete();
     }
 
     public HttpClient CreateHttpClient(TimeSpan? timeout = null) => new(new BearerHandler(this))
@@ -99,6 +117,7 @@ public sealed class ControlAuthClient
         accessToken = auth.AccessToken;
         expiresUtc = DateTimeOffset.UtcNow.AddSeconds(Math.Max(60, auth.ExpiresIn));
         User = auth.User;
+        MfaRequired = false; pendingMfaAccessToken = ""; pendingMfaFactorId = "";
         tokenStore.Save(auth.RefreshToken);
         return true;
     }
@@ -121,6 +140,8 @@ public sealed class AuthResponse
     public string RefreshToken { get; set; } = "";
     public int ExpiresIn { get; set; }
     public AuthenticatedControlUser User { get; set; } = new();
+    public bool MfaRequired { get; set; }
+    public string FactorId { get; set; } = "";
 }
 
 public sealed class AuthenticatedControlUser

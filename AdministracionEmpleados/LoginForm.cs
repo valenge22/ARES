@@ -33,7 +33,13 @@ internal sealed class LoginForm : Form
         try
         {
             if (!await AresControlAuth.Client.LoginAsync(email.Text.Trim(), password.Text))
-            { status.ForeColor = Color.Firebrick; status.Text = "Correo, contraseña o permisos inválidos."; return; }
+            {
+                if (!AresControlAuth.Client.MfaRequired)
+                { status.ForeColor = Color.Firebrick; status.Text = "Correo, contraseña o permisos inválidos."; return; }
+                string code = Microsoft.VisualBasic.Interaction.InputBox("Ingresá el código de 6 dígitos de tu aplicación autenticadora.", "Verificación en dos pasos", "");
+                if (string.IsNullOrWhiteSpace(code) || !await AresControlAuth.Client.CompleteMfaAsync(code))
+                { status.ForeColor = Color.Firebrick; status.Text = "El código de verificación no es válido."; return; }
+            }
             DialogResult = DialogResult.OK; Close();
         }
         catch (Exception ex) { status.ForeColor = Color.Firebrick; status.Text = $"No se pudo conectar: {ex.Message}"; }

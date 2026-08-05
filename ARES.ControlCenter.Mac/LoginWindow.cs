@@ -79,10 +79,32 @@ internal sealed class LoginWindow : Window
         try
         {
             if (!await MacControlAuth.Client.LoginAsync(email.Text.Trim(), password.Text))
-            { status.Foreground = Brush.Parse("#B91C1C"); status.Text = "Correo, contraseña o permisos inválidos."; return; }
+            {
+                if (!MacControlAuth.Client.MfaRequired)
+                { status.Foreground = Brush.Parse("#B91C1C"); status.Text = "Correo, contraseña o permisos inválidos."; return; }
+                if (!await VerifyMfaAsync())
+                { status.Foreground = Brush.Parse("#B91C1C"); status.Text = "El código de verificación no es válido."; return; }
+            }
             authenticated(); Close();
         }
         catch (Exception ex) { status.Foreground = Brush.Parse("#B91C1C"); status.Text = $"No se pudo conectar: {ex.Message}"; }
         finally { login.IsEnabled = true; password.Text = ""; }
+    }
+
+    private async Task<bool> VerifyMfaAsync()
+    {
+        bool verified = false;
+        var code = new TextBox { PlaceholderText = "Código de 6 dígitos", MaxLength = 6 };
+        var verify = new Button { Content = "Verificar", Background = Brush.Parse("#2563EB"), Foreground = Brushes.White };
+        var message = new TextBlock { Foreground = Brush.Parse("#B91C1C") };
+        var dialog = new Window { Title = "Verificación en dos pasos", Width = 420, Height = 245, WindowStartupLocation = WindowStartupLocation.CenterOwner,
+            Content = new StackPanel { Margin = new Thickness(28), Spacing = 12, Children = { new TextBlock { Text = "Ingresá el código de tu aplicación autenticadora." }, code, verify, message } } };
+        verify.Click += async (_, _) =>
+        {
+            verify.IsEnabled = false;
+            try { verified = await MacControlAuth.Client.CompleteMfaAsync(code.Text ?? ""); if (verified) dialog.Close(); else message.Text = "Código incorrecto."; }
+            finally { verify.IsEnabled = true; }
+        };
+        await dialog.ShowDialog(this); return verified;
     }
 }

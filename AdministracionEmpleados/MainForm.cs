@@ -288,20 +288,14 @@ namespace AdministracionEmpleados
             };
             tabla.AlternatingRowsDefaultCellStyle = new DataGridViewCellStyle { BackColor = Color.FromArgb(245, 245, 245) };
 
-            tabla.Columns.Add(new DataGridViewTextBoxColumn { Name = "Equipo", HeaderText = "EQUIPO", FillWeight = 120 });
-            tabla.Columns.Add(new DataGridViewTextBoxColumn { Name = "Estado", HeaderText = "ESTADO", FillWeight = 95 });
-            tabla.Columns.Add(new DataGridViewTextBoxColumn { Name = "Usuario", HeaderText = "USUARIO", FillWeight = 110 });
-            tabla.Columns.Add(new DataGridViewTextBoxColumn { Name = "IP", HeaderText = "DIRECCIÓN IP", FillWeight = 100 });
-            tabla.Columns.Add(new DataGridViewTextBoxColumn { Name = "Solicitud", HeaderText = "SOLICITUD", FillWeight = 120 });
-            tabla.Columns.Add(new DataGridViewTextBoxColumn { Name = "Motivo", HeaderText = "MOTIVO / PROXIMO CAMBIO", FillWeight = 135 });
-            tabla.Columns.Add(new DataGridViewTextBoxColumn { Name = "Grupo", HeaderText = "GRUPO", FillWeight = 70 });
-            tabla.Columns.Add(new DataGridViewButtonColumn { Name = "CambiarGrupo", HeaderText = "", Text = "Mover", UseColumnTextForButtonValue = true, FillWeight = 55, FlatStyle = FlatStyle.Flat });
-            tabla.Columns.Add(new DataGridViewButtonColumn { Name = "Excepcion", HeaderText = "", Text = "Excepcion", UseColumnTextForButtonValue = true, FillWeight = 65, FlatStyle = FlatStyle.Flat });
-            tabla.Columns.Add(new DataGridViewButtonColumn { Name = "ActualizarAgente", HeaderText = "VERSION", FillWeight = 65, FlatStyle = FlatStyle.Flat });
-            tabla.Columns.Add(new DataGridViewButtonColumn { Name = "Renombrar", HeaderText = "", Text = "Cambiar nombre", UseColumnTextForButtonValue = true, FillWeight = 85, FlatStyle = FlatStyle.Flat });
-            tabla.Columns.Add(new DataGridViewButtonColumn { Name = "Ver", HeaderText = "", Text = "Ver", UseColumnTextForButtonValue = true, FillWeight = 55, FlatStyle = FlatStyle.Flat });
-            tabla.Columns.Add(new DataGridViewButtonColumn { Name = "Credencial", HeaderText = "", Text = "Seguridad", UseColumnTextForButtonValue = true, FillWeight = 70, FlatStyle = FlatStyle.Flat });
-            tabla.Columns.Add(new DataGridViewButtonColumn { Name = "Accion", HeaderText = "ACCIÓN", FillWeight = 85, FlatStyle = FlatStyle.Flat });
+            tabla.Columns.Add(new DataGridViewTextBoxColumn { Name = "Equipo", HeaderText = "EQUIPO", FillWeight = 125 });
+            tabla.Columns.Add(new DataGridViewTextBoxColumn { Name = "Estado", HeaderText = "ESTADO", FillWeight = 90 });
+            tabla.Columns.Add(new DataGridViewTextBoxColumn { Name = "Usuario", HeaderText = "USUARIO", FillWeight = 105 });
+            tabla.Columns.Add(new DataGridViewTextBoxColumn { Name = "Grupo", HeaderText = "GRUPO", FillWeight = 85 });
+            tabla.Columns.Add(new DataGridViewTextBoxColumn { Name = "Motivo", HeaderText = "MOTIVO / PRÓXIMO CAMBIO", FillWeight = 185 });
+            tabla.Columns.Add(new DataGridViewTextBoxColumn { Name = "Solicitud", HeaderText = "SOLICITUD", FillWeight = 130 });
+            tabla.Columns.Add(new DataGridViewTextBoxColumn { Name = "Version", HeaderText = "VERSIÓN", FillWeight = 75 });
+            tabla.Columns.Add(new DataGridViewButtonColumn { Name = "Acciones", HeaderText = "", Text = "Acciones", UseColumnTextForButtonValue = true, FillWeight = 85, FlatStyle = FlatStyle.Flat });
 
             foreach (Empleado empleado in empleadoService.ObtenerEmpleados().Where(x => grupoVisible == "Todos" || x.Grupo == grupoVisible).OrderBy(x => x.Grupo).ThenBy(x => x.Nombre))
             {
@@ -309,18 +303,17 @@ namespace AdministracionEmpleados
                 string indicador = pc.EstaEncendida ? "●  " : "●  ";
                 int fila = tabla.Rows.Add(indicador + pc.Nombre,
                     pc.EstaBloqueada ? "Bloqueado" : "Desbloqueado",
-                    empleado.Nombre, pc.DireccionIP,
-                    pc.SolicitudDesbloqueoPendiente ? "🔔 Desbloqueo solicitado" : "—",
+                    empleado.Nombre, empleado.Grupo,
                     pc.MotivoBloqueo + (pc.ProximoCambioUtc.HasValue ? $"\n{pc.ProximoCambioUtc.Value.ToLocalTime():dd/MM HH:mm}" : ""),
-                    empleado.Grupo, "Mover", "Excepcion", pc.ActualizacionDisponible ? $"Actualizar {pc.UltimaVersion}" : $"v{pc.Version}", "Cambiar nombre", "Ver", "Seguridad",
-                    pc.EstaBloqueada ? "Desbloquear" : "Bloquear");
+                    pc.SolicitudDesbloqueoPendiente ? "Desbloqueo solicitado" : "—",
+                    pc.ActualizacionDisponible ? $"v{pc.Version} → v{pc.UltimaVersion}" : $"v{pc.Version}", "Acciones");
                 tabla.Rows[fila].Tag = empleado;
                 tabla.Rows[fila].Cells[0].Style.ForeColor = pc.EstaEncendida
                     ? Color.FromArgb(22, 163, 74) : Color.FromArgb(220, 38, 38);
                 if (pc.SolicitudDesbloqueoPendiente)
                 {
-                    tabla.Rows[fila].Cells[4].Style.ForeColor = Color.FromArgb(234, 88, 12);
-                    tabla.Rows[fila].Cells[4].Style.Font = new Font("Segoe UI", 9F, FontStyle.Bold);
+                    tabla.Rows[fila].Cells[5].Style.ForeColor = Color.FromArgb(234, 88, 12);
+                    tabla.Rows[fila].Cells[5].Style.Font = new Font("Segoe UI", 9F, FontStyle.Bold);
                     tabla.Rows[fila].DefaultCellStyle.BackColor = Color.FromArgb(255, 247, 237);
                 }
             }
@@ -328,7 +321,13 @@ namespace AdministracionEmpleados
             tabla.CellContentClick += async (_, e) =>
             {
                 if (e.RowIndex < 0 || tabla.Rows[e.RowIndex].Tag is not Empleado empleado) return;
-                if (tabla.Columns[e.ColumnIndex].Name == "Renombrar")
+                if (tabla.Columns[e.ColumnIndex].Name == "Acciones")
+                {
+                    tabla.Enabled = false;
+                    try { await MostrarAccionesEquipoAsync(empleado); }
+                    finally { if (!tabla.IsDisposed) tabla.Enabled = true; }
+                }
+                else if (tabla.Columns[e.ColumnIndex].Name == "Renombrar")
                 {
                     string? nombre = PedirNombreEquipo(empleado.Computadora.Nombre);
                     if (string.IsNullOrWhiteSpace(nombre)) return;
@@ -429,6 +428,136 @@ namespace AdministracionEmpleados
                 }
             };
             return tabla;
+        }
+
+        private async Task MostrarAccionesEquipoAsync(Empleado empleado)
+        {
+            Computadora pc = empleado.Computadora;
+            string? accionSeleccionada = null;
+            using var form = new Form
+            {
+                Text = $"Acciones de {pc.Nombre}",
+                Width = 500,
+                Height = 650,
+                StartPosition = FormStartPosition.CenterParent,
+                FormBorderStyle = FormBorderStyle.FixedDialog,
+                MaximizeBox = false,
+                MinimizeBox = false,
+                BackColor = Color.White
+            };
+
+            var titulo = new Label
+            {
+                Text = pc.Nombre,
+                Font = new Font("Segoe UI", 16F, FontStyle.Bold),
+                ForeColor = Color.FromArgb(15, 45, 80),
+                AutoSize = true,
+                Location = new Point(28, 22)
+            };
+            var resumen = new Label
+            {
+                Text = $"{(pc.EstaEncendida ? "En línea" : "Sin conexión")}  •  {(pc.EstaBloqueada ? "Bloqueado" : "Desbloqueado")}  •  {empleado.Grupo}",
+                Font = new Font("Segoe UI", 9.5F),
+                ForeColor = Color.FromArgb(71, 85, 105),
+                AutoSize = true,
+                Location = new Point(30, 58)
+            };
+            var separador = new Panel { BackColor = Color.FromArgb(226, 232, 240), Location = new Point(28, 88), Size = new Size(428, 1) };
+            var acciones = new FlowLayoutPanel
+            {
+                Location = new Point(28, 108),
+                Size = new Size(428, 440),
+                FlowDirection = FlowDirection.TopDown,
+                WrapContents = false
+            };
+
+            Button CrearAccion(string texto, string accion, Color? color = null, bool habilitado = true)
+            {
+                var boton = new Button
+                {
+                    Text = texto,
+                    Width = 420,
+                    Height = 42,
+                    Margin = new Padding(0, 0, 0, 8),
+                    FlatStyle = FlatStyle.Flat,
+                    BackColor = color ?? Color.FromArgb(239, 246, 255),
+                    ForeColor = color.HasValue ? Color.White : Color.FromArgb(30, 64, 175),
+                    Font = new Font("Segoe UI", 10F, FontStyle.Bold),
+                    TextAlign = ContentAlignment.MiddleLeft,
+                    Padding = new Padding(14, 0, 0, 0),
+                    Enabled = habilitado
+                };
+                boton.FlatAppearance.BorderColor = color ?? Color.FromArgb(191, 219, 254);
+                boton.Click += (_, _) => { accionSeleccionada = accion; form.DialogResult = DialogResult.OK; form.Close(); };
+                return boton;
+            }
+
+            acciones.Controls.Add(CrearAccion(pc.EstaBloqueada ? "Desbloquear equipo" : "Bloquear equipo", "bloqueo", Color.FromArgb(37, 99, 235)));
+            acciones.Controls.Add(CrearAccion("Ver detalles del equipo", "ver"));
+            acciones.Controls.Add(CrearAccion("Cambiar nombre", "renombrar"));
+            acciones.Controls.Add(CrearAccion("Mover a otro grupo", "grupo"));
+            acciones.Controls.Add(CrearAccion("Configurar excepción temporal", "excepcion"));
+            acciones.Controls.Add(CrearAccion(
+                pc.ActualizacionDisponible ? $"Actualizar ARES Agent a v{pc.UltimaVersion}" : $"ARES Agent v{pc.Version} está actualizado",
+                "actualizar", habilitado: pc.ActualizacionDisponible));
+            acciones.Controls.Add(CrearAccion("Renovar credencial del equipo", "renovar", habilitado: pc.CredencialIndividual));
+            acciones.Controls.Add(CrearAccion("Revocar acceso del equipo", "revocar", Color.FromArgb(220, 38, 38), pc.CredencialIndividual));
+
+            var cerrar = new Button { Text = "Cerrar", Width = 105, Height = 36, Location = new Point(351, 564), DialogResult = DialogResult.Cancel };
+            form.Controls.AddRange([titulo, resumen, separador, acciones, cerrar]);
+            form.CancelButton = cerrar;
+            form.ShowDialog(this);
+            if (accionSeleccionada is null) return;
+
+            try
+            {
+                switch (accionSeleccionada)
+                {
+                    case "bloqueo":
+                        bool bloquear = !pc.EstaBloqueada;
+                        string verbo = bloquear ? "bloquear" : "desbloquear";
+                        if (MessageBox.Show($"¿Confirmás que querés {verbo} {pc.Nombre}?", $"{(bloquear ? "Bloquear" : "Desbloquear")} equipo", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
+                        await discoveryService.EstablecerRestriccionAsync(pc.AgentId, bloquear);
+                        pc.EstaBloqueada = bloquear;
+                        break;
+                    case "ver":
+                        MessageBox.Show($"Equipo: {pc.Nombre}\nUsuario: {empleado.Nombre}\nGrupo: {empleado.Grupo}\nIP: {pc.DireccionIP}\nSistema: {pc.SistemaOperativo}\nVersión: {pc.Version}\nEstado: {(pc.EstaEncendida ? "En línea" : "Sin conexión")}", "Detalle del equipo", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                        return;
+                    case "renombrar":
+                        string? nombre = PedirNombreEquipo(pc.Nombre);
+                        if (string.IsNullOrWhiteSpace(nombre)) return;
+                        await discoveryService.RenombrarEquipoAsync(pc.AgentId, nombre.Trim());
+                        break;
+                    case "grupo":
+                        string? grupo = PedirGrupo(empleado.Grupo);
+                        if (grupo is null) return;
+                        await discoveryService.EstablecerGrupoAsync(pc.AgentId, grupo);
+                        break;
+                    case "excepcion":
+                        var seleccion = PedirExcepcion(pc.ExcepcionHastaUtc);
+                        if (seleccion is null) return;
+                        if (seleccion.Value.Quitar) await discoveryService.QuitarExcepcionAsync(pc.AgentId);
+                        else await discoveryService.EstablecerExcepcionAsync(pc.AgentId, seleccion.Value.Hasta.ToUniversalTime(), seleccion.Value.Permitir);
+                        break;
+                    case "actualizar":
+                        await discoveryService.SolicitarActualizacionAsync(pc.AgentId);
+                        MessageBox.Show("Orden enviada. La actualización comenzará cuando ARES Agent vuelva a consultar el servidor.", "ARES", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                        break;
+                    case "renovar":
+                        await discoveryService.RenovarCredencialEquipoAsync(pc.AgentId);
+                        MessageBox.Show("Renovación solicitada. Se completará automáticamente cuando el servicio ARES se conecte.", "ARES", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                        break;
+                    case "revocar":
+                        if (MessageBox.Show($"¿Revocar el acceso de {pc.Nombre}?\n\nEl equipo perderá acceso al servidor y necesitará un nuevo código de vinculación.", "Revocar acceso del equipo", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes) return;
+                        await discoveryService.RevocarCredencialEquipoAsync(pc.AgentId);
+                        break;
+                }
+                await BuscarEquiposAsync();
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"No se pudo completar la acción.\n\n{ex.Message}", "ARES", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
         }
 
         private static string? PedirNombreEquipo(string actual)

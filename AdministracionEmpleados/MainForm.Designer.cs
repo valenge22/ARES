@@ -56,7 +56,7 @@ namespace AdministracionEmpleados
 
             SuspendLayout();
 
-            pnlMenu.BackColor = Color.FromArgb(52, 58, 64);
+            pnlMenu.BackColor = Color.FromArgb(11, 35, 64);
             pnlMenu.Dock = DockStyle.Left;
             pnlMenu.Width = 205;
             pnlMenu.Controls.Add(flpNavegacion);
@@ -64,26 +64,29 @@ namespace AdministracionEmpleados
 
             pnlMarca.Dock = DockStyle.Top;
             pnlMarca.Height = 76;
-            pnlMarca.BackColor = Color.White;
+            pnlMarca.BackColor = Color.FromArgb(11, 35, 64);
             pnlMarca.Controls.Add(lblEscudo);
             pnlMarca.Controls.Add(lblARES);
             pnlMarca.Controls.Add(lblVersion);
 
             lblEscudo.AutoSize = true;
             lblEscudo.Font = new Font("Segoe UI Emoji", 21F);
-            lblEscudo.ForeColor = Color.FromArgb(196, 54, 54);
+            lblEscudo.ForeColor = Color.FromArgb(56, 189, 248);
+            lblEscudo.BackColor = Color.Transparent;
             lblEscudo.Location = new Point(17, 17);
             lblEscudo.Text = "🛡";
 
             lblARES.AutoSize = true;
             lblARES.Font = new Font("Segoe UI", 19F, FontStyle.Bold);
-            lblARES.ForeColor = Color.FromArgb(38, 45, 52);
+            lblARES.ForeColor = Color.White;
+            lblARES.BackColor = Color.Transparent;
             lblARES.Location = new Point(59, 14);
             lblARES.Text = "ARES";
 
             lblVersion.AutoSize = true;
             lblVersion.Font = new Font("Segoe UI", 9F);
-            lblVersion.ForeColor = Color.FromArgb(138, 47, 47);
+            lblVersion.ForeColor = Color.FromArgb(125, 211, 252);
+            lblVersion.BackColor = Color.Transparent;
             lblVersion.Location = new Point(61, 45);
             lblVersion.Text = "CENTRO DE CONTROL";
 
@@ -91,7 +94,7 @@ namespace AdministracionEmpleados
             flpNavegacion.FlowDirection = FlowDirection.TopDown;
             flpNavegacion.WrapContents = false;
             flpNavegacion.Padding = new Padding(0, 10, 0, 0);
-            flpNavegacion.BackColor = Color.FromArgb(52, 58, 64);
+            flpNavegacion.BackColor = Color.FromArgb(11, 35, 64);
             flpNavegacion.Controls.AddRange(new Control[] {
                 btnEmpleados, btnEquipos, btnMonitor, btnSeguridad,
                 btnPantallas, btnConfiguracion
@@ -160,7 +163,7 @@ namespace AdministracionEmpleados
         {
             return new Button
             {
-                BackColor = Color.FromArgb(52, 58, 64),
+                BackColor = Color.FromArgb(11, 35, 64),
                 Cursor = Cursors.Hand,
                 FlatStyle = FlatStyle.Flat,
                 Font = new Font("Segoe UI", 9.2F),

@@ -137,12 +137,12 @@ namespace AdministracionEmpleados
         {
             if (botonActivo != null)
             {
-                botonActivo.BackColor = Color.FromArgb(52, 58, 64);
+                botonActivo.BackColor = Color.FromArgb(11, 35, 64);
                 botonActivo.ForeColor = Color.FromArgb(238, 238, 238);
             }
 
             botonActivo = activo;
-            activo.BackColor = Color.FromArgb(190, 55, 55);
+            activo.BackColor = Color.FromArgb(37, 99, 235);
             activo.ForeColor = Color.White;
         }
 
@@ -808,7 +808,7 @@ namespace AdministracionEmpleados
 
         private static Panel CrearEncabezadoTarjeta(string titulo, string detalle)
         {
-            var panel = new Panel { Dock = DockStyle.Top, Height = 64, BackColor = Color.FromArgb(58, 113, 177), Padding = new Padding(18, 9, 10, 0) };
+            var panel = new Panel { Dock = DockStyle.Top, Height = 64, BackColor = Color.FromArgb(37, 99, 235), Padding = new Padding(18, 9, 10, 0) };
             panel.Controls.Add(new Label { Text = detalle, AutoSize = true, Location = new Point(20, 37), ForeColor = Color.FromArgb(225, 235, 247), Font = new Font("Segoe UI", 8F) });
             panel.Controls.Add(new Label { Text = titulo, AutoSize = true, Location = new Point(18, 10), ForeColor = Color.White, Font = new Font("Segoe UI", 11F, FontStyle.Bold) });
             return panel;

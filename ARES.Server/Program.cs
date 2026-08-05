@@ -100,7 +100,8 @@ app.Use(async (context, next) =>
         context.Request.Path.Equals("/api/agents/enroll") ||
         context.Request.Path.Equals("/api/auth/recover") ||
         context.Request.Path.Equals("/api/auth/update-password");
-    publicPath = publicPath || context.Request.Path.Equals("/api/auth/mfa/verify");
+    publicPath = publicPath || context.Request.Path.Equals("/api/auth/mfa/verify") ||
+        context.Request.Path.Equals("/api/auth/mfa/recover");
     bool validApiKey = context.Request.Headers.TryGetValue("X-ARES-Key", out var supplied) && supplied == apiKey;
     DeviceIdentity? deviceIdentity = null;
     if (context.Request.Headers.TryGetValue("X-ARES-Device", out var deviceCredential) && !string.IsNullOrWhiteSpace(deviceCredential))
@@ -321,10 +322,35 @@ app.MapPost("/api/auth/mfa/verify", async (MfaVerifyRequest request, HttpContext
     await persistence.RegisterAuthSessionAsync(result.User.UserId, result.User.OrganizationId, HashToken(result.AccessToken), HashToken(result.RefreshToken), ClientName(context), ClientIp(context));
     return Results.Ok(result);
 });
+app.MapPost("/api/auth/mfa/recover", async (MfaRecoveryRequest request, HttpContext context, CancellationToken cancellationToken) =>
+{
+    if (!authService.RecoveryConfigured)
+        return Results.BadRequest(new { error = "La recuperación 2FA todavía no está configurada en el servidor." });
+    var identity = await authService.IdentifyForRecoveryAsync(request.AccessToken, cancellationToken);
+    if (identity is null) return Results.Json(new { error = "La sesión de recuperación no es válida." }, statusCode: 401);
+    byte[] codeHash = HashRecoveryCode(identity.Value.UserId, request.RecoveryCode);
+    if (!await persistence.IsMfaRecoveryCodeValidAsync(identity.Value.UserId, codeHash))
+        return Results.BadRequest(new { error = "El código de recuperación es inválido o ya fue utilizado." });
+    if (!await authService.RemoveMfaFactorAsAdminAsync(identity.Value.UserId, request.FactorId, cancellationToken))
+        return Results.BadRequest(new { error = "Supabase no permitió retirar el segundo factor." });
+    if (!await persistence.ConsumeMfaRecoveryCodeAsync(identity.Value.UserId, codeHash))
+        return Results.BadRequest(new { error = "El código de recuperación ya fue utilizado." });
+    var result = new AuthResult(request.AccessToken, request.RefreshToken, 0, identity.Value.Admin, false, "");
+    await persistence.RegisterAuthSessionAsync(result.User.UserId, result.User.OrganizationId, HashToken(result.AccessToken), HashToken(result.RefreshToken), ClientName(context), ClientIp(context));
+    return Results.Ok(result);
+});
+
 app.MapGet("/api/account/mfa", async (HttpContext context, CancellationToken cancellationToken) =>
 {
     string token = BearerToken(context); JsonElement? result = await authService.ListMfaAsync(token, cancellationToken);
     return result.HasValue ? Results.Ok(ExtractMfaFactors(result.Value)) : Results.BadRequest(new { error = "No se pudo consultar el segundo factor." });
+});
+app.MapPost("/api/account/mfa/recovery-codes", async (HttpContext context) =>
+{
+    Guid userId = CurrentAdmin(context).UserId;
+    List<string> recoveryCodes = GenerateRecoveryCodes();
+    await persistence.ReplaceMfaRecoveryCodesAsync(userId, recoveryCodes.Select(x => HashRecoveryCode(userId, x)).ToList());
+    return Results.Ok(new { recoveryCodes });
 });
 app.MapPost("/api/account/mfa/enroll", async (HttpContext context, CancellationToken cancellationToken) =>
 {
@@ -374,7 +400,9 @@ app.MapPost("/api/account/mfa/verify", async (MfaVerifyRequest request, HttpCont
     AuthResult? result = await authService.VerifyMfaAsync(BearerToken(context), request.FactorId, request.Code, cancellationToken);
     if (result is null) return Results.BadRequest(new { error = "El código de verificación no es válido." });
     await persistence.RegisterAuthSessionAsync(result.User.UserId, result.User.OrganizationId, HashToken(result.AccessToken), HashToken(result.RefreshToken), ClientName(context), ClientIp(context));
-    return Results.Ok(result);
+    List<string> recoveryCodes = GenerateRecoveryCodes();
+    await persistence.ReplaceMfaRecoveryCodesAsync(result.User.UserId, recoveryCodes.Select(x => HashRecoveryCode(result.User.UserId, x)).ToList());
+    return Results.Ok(new { result.AccessToken, result.RefreshToken, result.ExpiresIn, result.User, result.MfaRequired, result.FactorId, recoveryCodes });
 });
 app.MapDelete("/api/account/mfa/{factorId}", async (string factorId, HttpContext context, CancellationToken cancellationToken) =>
     await authService.UnenrollMfaAsync(BearerToken(context), factorId, cancellationToken) ? Results.Ok(new { removed = true }) : Results.BadRequest(new { error = "No se pudo desactivar 2FA." }));
@@ -1111,6 +1139,19 @@ bool IsPlatformAdmin(HttpContext context) => context.Items["AresAdmin"] is Authe
 bool ValidRole(string role) => role is "Owner" or "Administrator" or "Operator" or "Viewer";
 byte[] HashInvitationCode(string? code) => SHA256.HashData(Encoding.UTF8.GetBytes((code ?? "").Trim().ToUpperInvariant()));
 byte[] HashSecret(string? value) => SHA256.HashData(Encoding.UTF8.GetBytes((value ?? "").Trim().ToUpperInvariant()));
+byte[] HashRecoveryCode(Guid userId, string? value) => SHA256.HashData(Encoding.UTF8.GetBytes($"{userId:N}:{(value ?? "").Trim().ToUpperInvariant()}"));
+List<string> GenerateRecoveryCodes()
+{
+    const string alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+    var codes = new List<string>();
+    for (int item = 0; item < 10; item++)
+    {
+        byte[] random = RandomNumberGenerator.GetBytes(8);
+        string value = new(random.Select(x => alphabet[x % alphabet.Length]).ToArray());
+        codes.Add($"ARES-{value[..4]}-{value[4..]}");
+    }
+    return codes;
+}
 List<JsonElement> ExtractMfaFactors(JsonElement root)
 {
     var result = new List<JsonElement>();

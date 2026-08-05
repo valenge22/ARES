@@ -30,6 +30,7 @@ Para habilitar el inicio de sesión de los paneles, agregar también:
 
 - `SUPABASE_URL`: URL pública del proyecto, por ejemplo `https://proyecto.supabase.co`.
 - `SUPABASE_ANON_KEY`: clave pública `anon`/publishable del proyecto. Nunca usar
+- `SUPABASE_SERVICE_ROLE_KEY`: clave secreta `service_role` del proyecto. Se usa exclusivamente en Render para recuperar cuentas con 2FA. Nunca debe incluirse en instaladores, aplicaciones cliente ni repositorios.
   la clave `service_role` en un panel ni publicarla en GitHub.
 Los códigos de invitación se generan desde **Administrar usuarios**. Cada código
 tiene cantidad máxima de usos, vencimiento y revocación; se guarda únicamente su

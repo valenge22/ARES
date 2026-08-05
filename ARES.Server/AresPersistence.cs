@@ -190,6 +190,13 @@ internal sealed class AresPersistence
                 successful boolean not null,
                 occurred_at timestamptz not null default now()
             );
+            create table if not exists ares_mfa_recovery_codes (
+                recovery_id uuid primary key,
+                user_id uuid not null,
+                code_hash bytea not null unique,
+                created_at timestamptz not null default now(),
+                used_at timestamptz
+            );
 
             alter table ares_state enable row level security;
             alter table ares_admin_users enable row level security;
@@ -200,6 +207,7 @@ internal sealed class AresPersistence
             alter table ares_devices enable row level security;
             alter table ares_auth_sessions enable row level security;
             alter table ares_login_events enable row level security;
+            alter table ares_mfa_recovery_codes enable row level security;
 
             revoke all on table ares_state from anon, authenticated;
             revoke all on table ares_admin_users from anon, authenticated;
@@ -210,8 +218,47 @@ internal sealed class AresPersistence
             revoke all on table ares_devices from anon, authenticated;
             revoke all on table ares_auth_sessions from anon, authenticated;
             revoke all on table ares_login_events from anon, authenticated;
+            revoke all on table ares_mfa_recovery_codes from anon, authenticated;
             """;
         await command.ExecuteNonQueryAsync();
+    }
+
+    public async Task ReplaceMfaRecoveryCodesAsync(Guid userId, IReadOnlyCollection<byte[]> hashes)
+    {
+        if (!UsesDatabase) throw new InvalidOperationException("Los códigos de recuperación requieren PostgreSQL.");
+        await using var connection = new NpgsqlConnection(connectionString); await connection.OpenAsync();
+        await using var transaction = await connection.BeginTransactionAsync();
+        await using var command = connection.CreateCommand(); command.Transaction = transaction;
+        command.CommandText = "delete from ares_mfa_recovery_codes where user_id=@user";
+        command.Parameters.AddWithValue("user", userId); await command.ExecuteNonQueryAsync();
+        foreach (byte[] hash in hashes)
+        {
+            command.Parameters.Clear();
+            command.CommandText = "insert into ares_mfa_recovery_codes(recovery_id,user_id,code_hash) values(@id,@user,@hash)";
+            command.Parameters.AddWithValue("id", Guid.NewGuid()); command.Parameters.AddWithValue("user", userId);
+            command.Parameters.AddWithValue("hash", hash); await command.ExecuteNonQueryAsync();
+        }
+        await transaction.CommitAsync();
+    }
+
+    public async Task<bool> ConsumeMfaRecoveryCodeAsync(Guid userId, byte[] hash)
+    {
+        if (!UsesDatabase) return false;
+        await using var connection = new NpgsqlConnection(connectionString); await connection.OpenAsync();
+        await using var command = connection.CreateCommand();
+        command.CommandText = "update ares_mfa_recovery_codes set used_at=now() where user_id=@user and code_hash=@hash and used_at is null";
+        command.Parameters.AddWithValue("user", userId); command.Parameters.AddWithValue("hash", hash);
+        return await command.ExecuteNonQueryAsync() == 1;
+    }
+
+    public async Task<bool> IsMfaRecoveryCodeValidAsync(Guid userId, byte[] hash)
+    {
+        if (!UsesDatabase) return false;
+        await using var connection = new NpgsqlConnection(connectionString); await connection.OpenAsync();
+        await using var command = connection.CreateCommand();
+        command.CommandText = "select exists(select 1 from ares_mfa_recovery_codes where user_id=@user and code_hash=@hash and used_at is null)";
+        command.Parameters.AddWithValue("user", userId); command.Parameters.AddWithValue("hash", hash);
+        return (bool)(await command.ExecuteScalarAsync() ?? false);
     }
 
     public async Task EnsureOwnerAsync(string? userId, string? displayName)

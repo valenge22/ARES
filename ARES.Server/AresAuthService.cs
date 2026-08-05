@@ -8,13 +8,16 @@ internal sealed class AresAuthService
     private readonly HttpClient http = new() { Timeout = TimeSpan.FromSeconds(20) };
     private readonly string? supabaseUrl;
     private readonly string? anonKey;
+    private readonly string? serviceRoleKey;
     private readonly AresPersistence persistence;
     public bool IsConfigured => !string.IsNullOrWhiteSpace(supabaseUrl) && !string.IsNullOrWhiteSpace(anonKey);
+    public bool RecoveryConfigured => IsConfigured && !string.IsNullOrWhiteSpace(serviceRoleKey);
 
     public AresAuthService(IConfiguration configuration, AresPersistence persistence)
     {
         supabaseUrl = (configuration["SUPABASE_URL"] ?? Environment.GetEnvironmentVariable("SUPABASE_URL"))?.TrimEnd('/');
         anonKey = configuration["SUPABASE_ANON_KEY"] ?? Environment.GetEnvironmentVariable("SUPABASE_ANON_KEY");
+        serviceRoleKey = configuration["SUPABASE_SERVICE_ROLE_KEY"] ?? Environment.GetEnvironmentVariable("SUPABASE_SERVICE_ROLE_KEY");
         this.persistence = persistence;
     }
 
@@ -137,6 +140,31 @@ internal sealed class AresAuthService
     public async Task<bool> UnenrollMfaAsync(string accessToken, string factorId, CancellationToken cancellationToken)
         => (await MfaJsonAsync(HttpMethod.Delete, $"/auth/v1/factors/{Uri.EscapeDataString(factorId)}", accessToken, null, cancellationToken)).HasValue;
 
+    public async Task<(Guid UserId, AuthenticatedAdmin Admin)?> IdentifyForRecoveryAsync(string accessToken, CancellationToken cancellationToken)
+    {
+        if (!IsConfigured || string.IsNullOrWhiteSpace(accessToken)) return null;
+        using var request = CreateRequest(HttpMethod.Get, "/auth/v1/user");
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
+        using HttpResponseMessage response = await http.SendAsync(request, cancellationToken);
+        if (!response.IsSuccessStatusCode) return null;
+        using JsonDocument document = JsonDocument.Parse(await response.Content.ReadAsStringAsync(cancellationToken));
+        if (!document.RootElement.TryGetProperty("id", out JsonElement id) || !Guid.TryParse(id.GetString(), out Guid userId)) return null;
+        AdminUser? admin = await persistence.GetAdminAsync(userId); if (admin is null || !admin.Enabled) return null;
+        string email = document.RootElement.TryGetProperty("email", out JsonElement emailValue) ? emailValue.GetString() ?? admin.Email : admin.Email;
+        return (userId, new AuthenticatedAdmin(admin.UserId, admin.OrganizationId, email, admin.DisplayName, admin.Role));
+    }
+
+    public async Task<bool> RemoveMfaFactorAsAdminAsync(Guid userId, string factorId, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(serviceRoleKey) || string.IsNullOrWhiteSpace(factorId)) return false;
+        using var request = new HttpRequestMessage(HttpMethod.Delete,
+            $"{supabaseUrl}/auth/v1/admin/users/{userId:D}/factors/{Uri.EscapeDataString(factorId)}");
+        request.Headers.Add("apikey", serviceRoleKey);
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", serviceRoleKey);
+        using HttpResponseMessage response = await http.SendAsync(request, cancellationToken);
+        return response.IsSuccessStatusCode;
+    }
+
     private async Task<string?> GetVerifiedFactorIdAsync(string accessToken, CancellationToken cancellationToken)
     {
         using var request = CreateRequest(HttpMethod.Get, "/auth/v1/user"); request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
@@ -221,6 +249,7 @@ internal sealed record RecoverRequest(string Email);
 internal sealed record UpdatePasswordRequest(string AccessToken, string Password);
 internal sealed record ChangePasswordRequest(string Password);
 internal sealed record MfaVerifyRequest(string AccessToken, string FactorId, string Code);
+internal sealed record MfaRecoveryRequest(string AccessToken, string RefreshToken, string FactorId, string RecoveryCode);
 internal sealed record MfaFactorRequest(string FactorId);
 internal sealed record ApproveRegistrationRequest(string Role);
 internal sealed record UpdateAdminRequest(string Role, bool Enabled);

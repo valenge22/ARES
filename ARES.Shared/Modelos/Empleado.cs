@@ -3,7 +3,7 @@
     public class Empleado
     {
         public string Nombre { get; set; } = "";
-        public string Grupo { get; set; } = "Grupo 1";
+        public string Grupo { get; set; } = "General";
 
         public Computadora Computadora { get; set; } =
             new Computadora();

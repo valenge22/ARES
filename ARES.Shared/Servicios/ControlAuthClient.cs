@@ -132,6 +132,14 @@ public sealed class AuthenticatedControlUser
     public string Role { get; set; } = "";
 }
 
+public sealed class OrganizationSetupInfo
+{
+    public Guid OrganizationId { get; set; }
+    public string Name { get; set; } = "";
+    public string Slug { get; set; } = "";
+    public bool OnboardingCompleted { get; set; }
+}
+
 public sealed class RegistrationRequestInfo
 {
     public Guid UserId { get; set; }
@@ -172,7 +180,7 @@ public sealed class DeviceEnrollmentInfo
 {
     public Guid EnrollmentId { get; set; }
     public string CodePrefix { get; set; } = "";
-    public string AssignedGroup { get; set; } = "Grupo 1";
+    public string AssignedGroup { get; set; } = "General";
     public int MaxUses { get; set; }
     public int UsedCount { get; set; }
     public DateTimeOffset ExpiresAt { get; set; }

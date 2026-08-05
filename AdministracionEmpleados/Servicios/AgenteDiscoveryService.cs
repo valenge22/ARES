@@ -15,6 +15,16 @@ public sealed record AgenteDetectado(string Id, string Equipo, string Usuario, s
 public sealed class AgenteDiscoveryService
 {
     private static readonly string sessionId = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes($"{Environment.MachineName}|{Environment.UserName}|ARES.ControlCenter")))[..24];
+    public async Task<OrganizationSetupInfo?> ObtenerConfiguracionInicialAsync(CancellationToken cancelacion = default)
+    {
+        using HttpClient client = CrearCliente();
+        return await client.GetFromJsonAsync<OrganizationSetupInfo>($"{AresSettings.Cargar().ServerUrl.TrimEnd('/')}/api/onboarding", cancelacion);
+    }
+    public async Task CompletarConfiguracionInicialAsync(CancellationToken cancelacion = default)
+    {
+        using HttpClient client = CrearCliente(); using HttpResponseMessage response = await client.PostAsync($"{AresSettings.Cargar().ServerUrl.TrimEnd('/')}/api/onboarding/complete", null, cancelacion);
+        response.EnsureSuccessStatusCode();
+    }
     public async Task<IReadOnlyList<AgenteDetectado>> BuscarAsync(
         IEnumerable<string> direccionesConocidas,
         CancellationToken cancelacion = default)

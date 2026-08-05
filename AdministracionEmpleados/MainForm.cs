@@ -18,6 +18,7 @@ namespace AdministracionEmpleados
         private HashSet<string>? conectadosAnteriores;
         private readonly NotifyIcon notificador = new() { Icon = SystemIcons.Shield, Visible = true, Text = "ARES Centro de Control" };
         private List<ControlSessionStatus> sesionesPanel = [];
+        private List<GroupPolicy> grupos = [new() { Grupo = "General" }];
 
         public MainForm()
         {
@@ -41,6 +42,22 @@ namespace AdministracionEmpleados
             btnPantallas.Click += (_, _) => MostrarSeccion(btnPantallas);
             btnConfiguracion.Click += (_, _) => MostrarSeccion(btnConfiguracion);
             temporizadorDescubrimiento.Tick += async (_, _) => await BuscarEquiposAsync();
+            Shown += async (_, _) => await MostrarAsistenteInicialAsync();
+        }
+
+        private async Task MostrarAsistenteInicialAsync()
+        {
+            if (AresControlAuth.Client.User?.Role != "Owner") return;
+            try
+            {
+                OrganizationSetupInfo? setup = await discoveryService.ObtenerConfiguracionInicialAsync();
+                if (setup is not null && !setup.OnboardingCompleted)
+                {
+                    using var wizard = new OnboardingForm(discoveryService, setup);
+                    if (wizard.ShowDialog(this) == DialogResult.OK) await BuscarEquiposAsync();
+                }
+            }
+            catch (Exception ex) { MessageBox.Show($"No se pudo abrir la configuración inicial.\n\n{ex.Message}", "ARES", MessageBoxButtons.OK, MessageBoxIcon.Warning); }
         }
 
         private void MainForm_Load(object? sender, EventArgs e)
@@ -61,6 +78,8 @@ namespace AdministracionEmpleados
                 lblConexion.Text = "Buscando equipos…";
                 IReadOnlyList<AgenteDetectado> detectados = await discoveryService.BuscarAsync(
                     empleadoService.ObtenerEmpleados().Select(e => e.Computadora.DireccionIP));
+                grupos = await discoveryService.ObtenerPoliticasGrupoAsync();
+                if (grupos.Count == 0) grupos = [new() { Grupo = "General" }];
                 empleadoService.ActualizarEquiposDetectados(detectados);
                 ControlSessionHeartbeatResponse panelPolicy = await discoveryService.RegistrarSesionPanelAsync();
                 if (panelPolicy.ActualizarAhora) _ = ControlCenterUpdater.StartAsync(panelPolicy.Url);
@@ -426,7 +445,8 @@ namespace AdministracionEmpleados
         private async Task MostrarNuevaVinculacionAsync()
         {
             using var form = new Form { Text = "Vincular computadora", Width = 430, Height = 330, StartPosition = FormStartPosition.CenterParent, FormBorderStyle = FormBorderStyle.FixedDialog, MaximizeBox = false, MinimizeBox = false };
-            var group = new ComboBox { Width = 190, DropDownStyle = ComboBoxStyle.DropDownList }; group.Items.AddRange(["Grupo 1", "Grupo 2", "Grupo 3"]); group.SelectedIndex = 0;
+            var group = new ComboBox { Width = 260, DropDownStyle = ComboBoxStyle.DropDownList };
+            group.Items.AddRange(grupos.Select(x => x.Grupo).Cast<object>().ToArray()); group.SelectedIndex = group.Items.Count > 0 ? 0 : -1;
             var uses = new NumericUpDown { Minimum = 1, Maximum = 100, Value = 1, Width = 160 };
             var hours = new NumericUpDown { Minimum = 1, Maximum = 720, Value = 24, Width = 160 };
             var generate = new Button { Text = "Generar código", Width = 160, Height = 38 };
@@ -446,11 +466,11 @@ namespace AdministracionEmpleados
             form.ShowDialog(this);
         }
 
-        private static string? PedirGrupo(string actual)
+        private string? PedirGrupo(string actual)
         {
             using var dialogo = new Form { Text = "Mover a carpeta", Width = 380, Height = 175, StartPosition = FormStartPosition.CenterParent, FormBorderStyle = FormBorderStyle.FixedDialog };
             var lista = new ComboBox { Left = 20, Top = 42, Width = 325, DropDownStyle = ComboBoxStyle.DropDownList };
-            lista.Items.AddRange(["Grupo 1", "Grupo 2", "Grupo 3"]); lista.SelectedItem = actual; if (lista.SelectedIndex < 0) lista.SelectedIndex = 0;
+            lista.Items.AddRange(grupos.Select(x => x.Grupo).Cast<object>().ToArray()); lista.SelectedItem = actual; if (lista.SelectedIndex < 0 && lista.Items.Count > 0) lista.SelectedIndex = 0;
             var guardar = new Button { Text = "Mover", Left = 245, Top = 82, Width = 100, DialogResult = DialogResult.OK };
             dialogo.Controls.AddRange([new Label { Text = "Carpeta del empleado y equipo", Left = 20, Top = 18, AutoSize = true }, lista, guardar]); dialogo.AcceptButton = guardar;
             return dialogo.ShowDialog() == DialogResult.OK ? lista.SelectedItem?.ToString() : null;
@@ -667,6 +687,12 @@ namespace AdministracionEmpleados
                 estado.Text = lblConexion.Text.StartsWith("Error") ? lblConexion.Text : "Configuración guardada. Conexión correcta.";
             };
             contenido.Controls.Add(guardar);
+            if (AresControlAuth.Client.User?.Role is "Owner" or "Administrator")
+            {
+                var manageGroups = new Button { Text = "Administrar grupos", Width = 180, Height = 38, Margin = new Padding(0, 12, 0, 0), FlatStyle = FlatStyle.Flat, BackColor = Color.FromArgb(14, 116, 144), ForeColor = Color.White };
+                manageGroups.Click += async (_, _) => { using var form = new GroupManagementForm(discoveryService); if (form.ShowDialog(this) == DialogResult.OK) { grupos = await discoveryService.ObtenerPoliticasGrupoAsync(); if (botonActivo is not null) MostrarSeccion(botonActivo); } };
+                contenido.Controls.Add(manageGroups);
+            }
             if (AresControlAuth.Client.User?.Role == "Owner")
             {
                 var usuarios = new Button { Text = "Administrar usuarios", Width = 180, Height = 38, Margin = new Padding(0, 12, 0, 0), FlatStyle = FlatStyle.Flat, BackColor = Color.FromArgb(124, 58, 237), ForeColor = Color.White };
@@ -773,7 +799,8 @@ namespace AdministracionEmpleados
         private ComboBox CrearSelectorCarpetas()
         {
             var selector = new ComboBox { Dock = DockStyle.Right, Width = 125, DropDownStyle = ComboBoxStyle.DropDownList, Margin = new Padding(6, 18, 6, 18) };
-            selector.Items.AddRange(["Todos", "Grupo 1", "Grupo 2", "Grupo 3"]); selector.SelectedItem = grupoVisible;
+            selector.Items.Add("Todos"); selector.Items.AddRange(grupos.Select(x => x.Grupo).Cast<object>().ToArray()); selector.SelectedItem = grupoVisible;
+            if (selector.SelectedIndex < 0) { grupoVisible = "Todos"; selector.SelectedIndex = 0; }
             selector.SelectedIndexChanged += (_, _) => { grupoVisible = selector.SelectedItem?.ToString() ?? "Todos"; if (botonActivo is not null) MostrarSeccion(botonActivo); };
             return selector;
         }

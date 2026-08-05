@@ -57,7 +57,15 @@ public sealed class MainWindow : Window
         root.Children.Add(new Border { Background = Brush.Parse("#0F172A"), Child = nav }); Grid.SetColumn(main, 1); root.Children.Add(main); Content = root;
 
         timer.Tick += async (_, _) => await ShowAgentsAsync(false);
-        timer.Start(); Opened += async (_, _) => await ShowAgentsAsync();
+        timer.Start(); Opened += async (_, _) =>
+        {
+            if (MacControlAuth.Client.User?.Role == "Owner")
+            {
+                OrganizationSetupInfo? setup = await api.OrganizationSetupAsync();
+                if (setup is not null && !setup.OnboardingCompleted) await new OnboardingWindow(api, setup).ShowDialog(this);
+            }
+            await ShowAgentsAsync();
+        };
         Closed += (_, _) => timer.Stop();
     }
 
@@ -95,7 +103,14 @@ public sealed class MainWindow : Window
         var button = new Button { Content = agent.BloqueadoAdministrativamente ? "Desbloquear" : "Bloquear", Background = Brush.Parse(agent.BloqueadoAdministrativamente ? "#16A34A" : "#DC2626"), Foreground = Brushes.White, Padding = new Thickness(16, 9) };
         var rename = new Button { Content = "Cambiar nombre", Padding = new Thickness(12, 7) };
         var group = new Button { Content = "Mover de grupo", Padding = new Thickness(12, 7) };
-        group.Click += async (_, _) => { string next = agent.Grupo == "Grupo 1" ? "Grupo 2" : agent.Grupo == "Grupo 2" ? "Grupo 3" : "Grupo 1"; await api.SetGroupAsync(agent.Id, next); await ShowAgentsAsync(); };
+        group.Click += async (_, _) =>
+        {
+            List<GroupPolicy> groups = await api.GroupPoliciesAsync();
+            if (groups.Count == 0) return;
+            int current = groups.FindIndex(x => x.Grupo.Equals(agent.Grupo, StringComparison.OrdinalIgnoreCase));
+            string next = groups[(current + 1 + groups.Count) % groups.Count].Grupo;
+            await api.SetGroupAsync(agent.Id, next); await ShowAgentsAsync();
+        };
         var exception = new Button { Content = "Permitir 2 horas", Padding = new Thickness(12, 7) };
         exception.Click += async (_, _) => { await api.OverrideAsync(agent.Id, DateTimeOffset.UtcNow.AddHours(2)); await ShowAgentsAsync(); };
         var update = new Button { Content = agent.ActualizacionDisponible ? $"Actualizar a {agent.UltimaVersion}" : $"v{agent.Version}", Padding = new Thickness(12, 7), IsEnabled = agent.ActualizacionDisponible };
@@ -186,13 +201,38 @@ public sealed class MainWindow : Window
         var save = new Button { Content = "Guardar", HorizontalAlignment = HorizontalAlignment.Right, Padding = new Thickness(18, 9) };
         var logout = new Button { Content = "Cerrar sesión", HorizontalAlignment = HorizontalAlignment.Right, Padding = new Thickness(18, 9) };
         var users = new Button { Content = "Administrar usuarios", IsVisible = MacControlAuth.Client.User?.Role == "Owner", Padding = new Thickness(18, 9) };
+        var groups = new Button { Content = "Administrar grupos", IsVisible = MacControlAuth.Client.User?.Role is "Owner" or "Administrator", Padding = new Thickness(18, 9) };
         var dialog = new Window { Title = "Configuración de ARES", Width = 520, Height = 280, WindowStartupLocation = WindowStartupLocation.CenterOwner };
         string account = MacControlAuth.Client.User is null ? "" : $"{MacControlAuth.Client.User.DisplayName} · {MacControlAuth.Client.User.Email} · {MacControlAuth.Client.User.Role}";
-        dialog.Content = new StackPanel { Margin = new Thickness(24), Spacing = 12, Children = { new TextBlock { Text = $"Sesión: {account}" }, new TextBlock { Text = "Dirección del servidor" }, url, users, new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Spacing = 8, Children = { logout, save } } } };
+        dialog.Content = new StackPanel { Margin = new Thickness(24), Spacing = 12, Children = { new TextBlock { Text = $"Sesión: {account}" }, new TextBlock { Text = "Dirección del servidor" }, url, users, groups, new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Spacing = 8, Children = { logout, save } } } };
         save.Click += (_, _) => { settings.ServerUrl = url.Text?.Trim() ?? ""; settings.Save(); api.Update(settings); dialog.Close(); };
         logout.Click += (_, _) => { MacControlAuth.Client.Logout(); if (Application.Current?.ApplicationLifetime is Avalonia.Controls.ApplicationLifetimes.IClassicDesktopStyleApplicationLifetime desktop) desktop.Shutdown(); };
         users.Click += async (_, _) => await ShowUsersAsync(dialog);
+        groups.Click += async (_, _) => await ShowGroupsAsync(dialog);
         await dialog.ShowDialog(this); await ShowAgentsAsync();
+    }
+
+    private async Task ShowGroupsAsync(Window owner)
+    {
+        List<GroupPolicy> current = await api.GroupPoliciesAsync();
+        var names = new TextBox { Text = string.Join(Environment.NewLine, current.Select(x => x.Grupo)), AcceptsReturn = true, Height = 250 };
+        var message = new TextBlock { Foreground = Brush.Parse("#B91C1C"), TextWrapping = TextWrapping.Wrap };
+        var save = new Button { Content = "Guardar grupos", Background = Brush.Parse("#2563EB"), Foreground = Brushes.White };
+        var dialog = new Window { Title = "Grupos de la organización", Width = 480, Height = 460, WindowStartupLocation = WindowStartupLocation.CenterOwner,
+            Content = new StackPanel { Margin = new Thickness(26), Spacing = 12, Children = { new TextBlock { Text = "Un grupo por línea. Podés definir entre 1 y 50.", TextWrapping = TextWrapping.Wrap }, names, save, message } } };
+        save.Click += async (_, _) =>
+        {
+            string[] values = (names.Text ?? "").Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            if (values.Length is < 1 or > 50 || values.Any(x => x.Length > 60) || values.Distinct(StringComparer.OrdinalIgnoreCase).Count() != values.Length) { message.Text = "Revisá los nombres ingresados."; return; }
+            try
+            {
+                var updated = values.Select(name => current.FirstOrDefault(x => x.Grupo.Equals(name, StringComparison.OrdinalIgnoreCase)) is { } existing
+                    ? existing : new GroupPolicy { Grupo = name }).ToList();
+                await api.SaveGroupPoliciesAsync(updated); dialog.Close();
+            }
+            catch (Exception ex) { message.Text = ex.Message; }
+        };
+        await dialog.ShowDialog(owner);
     }
 
     private async Task ShowUsersAsync(Window owner)

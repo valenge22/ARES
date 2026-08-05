@@ -23,7 +23,7 @@ public sealed class AgentStatus : AgentHeartbeat
     public bool BloqueadoAdministrativamente { get; set; }
     public bool SolicitudDesbloqueoPendiente { get; set; }
     public DateTimeOffset? SolicitudDesbloqueoUtc { get; set; }
-    public string Grupo { get; set; } = "Grupo 1";
+    public string Grupo { get; set; } = "General";
     public DateTimeOffset? ExcepcionHastaUtc { get; set; }
     public bool? ExcepcionPermitirUso { get; set; }
     public string MotivoBloqueo { get; set; } = "Sin bloqueo";
@@ -64,7 +64,7 @@ public sealed class RestrictionRequest
 
 public sealed class GroupRequest
 {
-    public string Grupo { get; set; } = "Grupo 1";
+    public string Grupo { get; set; } = "General";
 }
 
 public sealed class TemporaryOverrideRequest
@@ -76,7 +76,7 @@ public sealed class TemporaryOverrideRequest
 
 public sealed class GroupPolicy
 {
-    public string Grupo { get; set; } = "Grupo 1";
+    public string Grupo { get; set; } = "General";
     public int MargenEntradaMinutos { get; set; }
     public int MargenSalidaMinutos { get; set; }
 }

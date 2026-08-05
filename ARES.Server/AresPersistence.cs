@@ -63,6 +63,8 @@ internal sealed class AresPersistence
             insert into ares_organizations(organization_id,name,slug)
             values ('00000000-0000-0000-0000-000000000001','Organización principal','principal')
             on conflict (organization_id) do nothing;
+            alter table ares_organizations add column if not exists onboarding_completed boolean not null default false;
+            update ares_organizations set onboarding_completed=true where organization_id='00000000-0000-0000-0000-000000000001';
 
             create table if not exists ares_state (
                 state_key text primary key,
@@ -124,7 +126,7 @@ internal sealed class AresPersistence
                 organization_id uuid not null,
                 code_hash bytea not null unique,
                 code_prefix varchar(18) not null,
-                assigned_group varchar(20) not null default 'Grupo 1',
+                assigned_group varchar(60) not null default 'General',
                 max_uses integer not null default 1,
                 used_count integer not null default 0,
                 expires_at timestamptz not null,
@@ -137,7 +139,7 @@ internal sealed class AresPersistence
                 organization_id uuid not null,
                 device_id varchar(64) not null,
                 machine_name varchar(100) not null,
-                assigned_group varchar(20) not null default 'Grupo 1',
+                assigned_group varchar(60) not null default 'General',
                 credential_hash bytea not null unique,
                 previous_credential_hash bytea,
                 enabled boolean not null default true,
@@ -146,7 +148,9 @@ internal sealed class AresPersistence
                 last_seen_at timestamptz,
                 primary key (organization_id, device_id)
             );
-            alter table ares_devices add column if not exists assigned_group varchar(20) not null default 'Grupo 1';
+            alter table ares_device_enrollment_codes alter column assigned_group type varchar(60);
+            alter table ares_devices add column if not exists assigned_group varchar(60) not null default 'General';
+            alter table ares_devices alter column assigned_group type varchar(60);
             alter table ares_devices add column if not exists rotation_requested boolean not null default false;
             alter table ares_devices add column if not exists previous_credential_hash bytea;
 
@@ -226,6 +230,23 @@ internal sealed class AresPersistence
             throw new InvalidOperationException("La cuenta ya pertenece a una organización ARES.");
         }
         await transaction.CommitAsync(); return organizationId;
+    }
+
+    public async Task<OrganizationSetupInfo?> GetOrganizationSetupAsync(Guid organizationId)
+    {
+        await using var connection = new NpgsqlConnection(connectionString); await connection.OpenAsync();
+        await using var command = connection.CreateCommand();
+        command.CommandText = "select organization_id,name,slug,onboarding_completed from ares_organizations where organization_id=@id and enabled=true";
+        command.Parameters.AddWithValue("id", organizationId); await using var reader = await command.ExecuteReaderAsync();
+        return await reader.ReadAsync() ? new(reader.GetGuid(0), reader.GetString(1), reader.GetString(2), reader.GetBoolean(3)) : null;
+    }
+
+    public async Task CompleteOrganizationSetupAsync(Guid organizationId)
+    {
+        await using var connection = new NpgsqlConnection(connectionString); await connection.OpenAsync();
+        await using var command = connection.CreateCommand();
+        command.CommandText = "update ares_organizations set onboarding_completed=true,updated_at=now() where organization_id=@id";
+        command.Parameters.AddWithValue("id", organizationId); await command.ExecuteNonQueryAsync();
     }
 
     public async Task<List<Guid>> GetOrganizationIdsAsync()
@@ -573,6 +594,7 @@ internal sealed class AresPersistence
 }
 
 internal sealed record AdminUser(Guid UserId, Guid OrganizationId, string Email, string DisplayName, string Role, bool Enabled);
+internal sealed record OrganizationSetupInfo(Guid OrganizationId, string Name, string Slug, bool OnboardingCompleted);
 internal sealed record InvitationGrant(Guid InvitationId, Guid OrganizationId, string InvitedRole);
 internal sealed record DeviceEnrollmentInfo(Guid EnrollmentId, string CodePrefix, string AssignedGroup, int MaxUses, int UsedCount, DateTimeOffset ExpiresAt, bool Revoked, DateTimeOffset CreatedAt);
 internal sealed record DeviceEnrollmentGrant(Guid EnrollmentId, Guid OrganizationId, string AssignedGroup);

@@ -14,6 +14,22 @@ internal sealed class AresApiClient
     public AresApiClient(MacSettings settings) => this.settings = settings;
     public void Update(MacSettings value) => settings = value;
 
+    public async Task<OrganizationSetupInfo?> OrganizationSetupAsync()
+    {
+        using var request = Request(HttpMethod.Get, "/api/onboarding"); using var response = await http.SendAsync(request); response.EnsureSuccessStatusCode();
+        return await response.Content.ReadFromJsonAsync<OrganizationSetupInfo>();
+    }
+    public async Task CompleteOrganizationSetupAsync()
+    {
+        using var request = Request(HttpMethod.Post, "/api/onboarding/complete"); using var response = await http.SendAsync(request); response.EnsureSuccessStatusCode();
+    }
+    public async Task<CreatedDeviceEnrollment> CreateDeviceEnrollmentAsync(string group)
+    {
+        using var request = Request(HttpMethod.Post, "/api/admin/device-enrollments"); request.Content = JsonContent.Create(new { maxUses = 1, durationHours = 24, group });
+        using var response = await http.SendAsync(request); response.EnsureSuccessStatusCode();
+        return await response.Content.ReadFromJsonAsync<CreatedDeviceEnrollment>() ?? throw new InvalidDataException("Respuesta de vinculación inválida.");
+    }
+
     private HttpRequestMessage Request(HttpMethod method, string path)
     {
         var request = new HttpRequestMessage(method, $"{settings.ServerUrl.TrimEnd('/')}{path}");
@@ -56,6 +72,16 @@ internal sealed class AresApiClient
     public async Task SetGroupAsync(string id, string group)
     {
         using var request = Request(HttpMethod.Put, $"/api/agents/{Uri.EscapeDataString(id)}/group"); request.Content = JsonContent.Create(new GroupRequest { Grupo = group });
+        using var response = await http.SendAsync(request); response.EnsureSuccessStatusCode();
+    }
+    public async Task<List<GroupPolicy>> GroupPoliciesAsync()
+    {
+        using var request = Request(HttpMethod.Get, "/api/group-policies"); using var response = await http.SendAsync(request); response.EnsureSuccessStatusCode();
+        return await response.Content.ReadFromJsonAsync<List<GroupPolicy>>() ?? [];
+    }
+    public async Task SaveGroupPoliciesAsync(List<GroupPolicy> groups)
+    {
+        using var request = Request(HttpMethod.Put, "/api/group-policies"); request.Content = JsonContent.Create(new GroupPoliciesRequest { Grupos = groups });
         using var response = await http.SendAsync(request); response.EnsureSuccessStatusCode();
     }
     public async Task OverrideAsync(string id, DateTimeOffset untilUtc)

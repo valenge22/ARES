@@ -54,8 +54,7 @@ var policiesByOrganization = new ConcurrentDictionary<Guid, List<GroupPolicy>>()
 schedules[AresPersistence.DefaultOrganizationId] = await LoadStateAsync("schedule", schedulePath, new ScheduleState());
 scheduleHistories[AresPersistence.DefaultOrganizationId] = await LoadStateAsync("schedule-history", historyPath, new List<ScheduleRevision>());
 var defaultPolicies = await LoadStateAsync("group-policies", policiesPath, new List<GroupPolicy>());
-foreach (string group in new[] { "Grupo 1", "Grupo 2", "Grupo 3" })
-    if (!defaultPolicies.Any(p => p.Grupo == group)) defaultPolicies.Add(new GroupPolicy { Grupo = group });
+if (defaultPolicies.Count == 0) defaultPolicies.Add(new GroupPolicy { Grupo = "General" });
 policiesByOrganization[AresPersistence.DefaultOrganizationId] = defaultPolicies;
 foreach (Guid organizationId in await persistence.GetOrganizationIdsAsync())
 {
@@ -63,8 +62,7 @@ foreach (Guid organizationId in await persistence.GetOrganizationIdsAsync())
     schedules[organizationId] = await persistence.LoadAsync<ScheduleState>($"org:{organizationId:N}:schedule") ?? new();
     scheduleHistories[organizationId] = await persistence.LoadAsync<List<ScheduleRevision>>($"org:{organizationId:N}:schedule-history") ?? [];
     List<GroupPolicy> policies = await persistence.LoadAsync<List<GroupPolicy>>($"org:{organizationId:N}:group-policies") ?? [];
-    foreach (string group in new[] { "Grupo 1", "Grupo 2", "Grupo 3" })
-        if (!policies.Any(p => p.Grupo == group)) policies.Add(new GroupPolicy { Grupo = group });
+    if (policies.Count == 0) policies.Add(new GroupPolicy { Grupo = "General" });
     policiesByOrganization[organizationId] = policies;
 }
 string latestAgentVersion = builder.Configuration["ARES_LATEST_AGENT_VERSION"] ?? "1.6.6";
@@ -171,6 +169,15 @@ app.MapPost("/api/auth/refresh", async (RefreshRequest request, CancellationToke
 });
 
 app.MapGet("/api/auth/me", (HttpContext context) => Results.Ok((AuthenticatedAdmin)context.Items["AresAdmin"]!));
+
+app.MapGet("/api/onboarding", async (HttpContext context) =>
+    Results.Ok(await persistence.GetOrganizationSetupAsync(CurrentOrganization(context))));
+app.MapPost("/api/onboarding/complete", async (HttpContext context) =>
+{
+    if (!IsOwner(context)) return Results.Forbid();
+    await persistence.CompleteOrganizationSetupAsync(CurrentOrganization(context));
+    return Results.Ok(new { completed = true });
+});
 
 app.MapPost("/api/auth/register", async (RegisterRequest request, HttpRequest httpRequest, CancellationToken cancellationToken) =>
 {
@@ -280,12 +287,14 @@ app.MapGet("/api/admin/device-enrollments", async (HttpContext context) =>
 app.MapPost("/api/admin/device-enrollments", async (CreateDeviceEnrollmentRequest request, HttpContext context) =>
 {
     if (!IsOwner(context)) return Results.Forbid();
+    string requestedGroup = request.Group?.Trim() ?? "";
     if (request.MaxUses is < 1 or > 1000 || request.DurationHours is < 1 or > 720 ||
-        request.Group is not ("Grupo 1" or "Grupo 2" or "Grupo 3")) return Results.BadRequest(new { error = "Parámetros de vinculación inválidos." });
+        !GetPolicies(CurrentOrganization(context)).Any(x => x.Grupo.Equals(requestedGroup, StringComparison.OrdinalIgnoreCase)))
+        return Results.BadRequest(new { error = "Parámetros de vinculación o grupo inválidos." });
     string raw = RandomNumberGenerator.GetHexString(12);
     string code = $"ARES-PC-{raw[..4]}-{raw[4..8]}-{raw[8..]}";
     AuthenticatedAdmin admin = CurrentAdmin(context);
-    DeviceEnrollmentInfo info = await persistence.CreateDeviceEnrollmentAsync(admin.OrganizationId, HashSecret(code), code[..12], request.Group,
+    DeviceEnrollmentInfo info = await persistence.CreateDeviceEnrollmentAsync(admin.OrganizationId, HashSecret(code), code[..12], requestedGroup,
         request.MaxUses, DateTimeOffset.UtcNow.AddHours(request.DurationHours), admin.UserId);
     return Results.Ok(new { code, enrollment = info });
 });
@@ -445,7 +454,7 @@ app.MapPost("/api/agents/heartbeat", async (AgentHeartbeat heartbeat, HttpContex
             // en un bloqueo manual permanente cuando el servidor pierde su almacenamiento.
             BloqueadoAdministrativamente = false,
             RequestToken = heartbeat.RequestToken
-            , Grupo = context.Items["AresDeviceGroup"] as string ?? "Grupo 1"
+            , Grupo = context.Items["AresDeviceGroup"] as string ?? GetPolicies(organizationId).First().Grupo
             , CredencialIndividual = context.Items["AresDeviceId"] is string
         },
         (_, existente) =>
@@ -507,9 +516,10 @@ app.MapPost("/api/agents/heartbeat", async (AgentHeartbeat heartbeat, HttpContex
 app.MapPut("/api/agents/{id}/group", async (string id, GroupRequest request, HttpContext context) =>
 {
     AgentStatus? agente = FindAgent(context, id); if (agente is null) return Results.NotFound();
-    string[] validos = ["Grupo 1", "Grupo 2", "Grupo 3"];
-    if (!validos.Contains(request.Grupo)) return Results.BadRequest(new { error = "Grupo invalido." });
-    agente.Grupo = request.Grupo;
+    string group = request.Grupo?.Trim() ?? "";
+    if (!GetPolicies(CurrentOrganization(context)).Any(x => x.Grupo.Equals(group, StringComparison.OrdinalIgnoreCase)))
+        return Results.BadRequest(new { error = "El grupo no existe en esta organización." });
+    agente.Grupo = group;
     await GuardarAsync();
     return Results.Ok(new { updated = true });
 });
@@ -520,10 +530,15 @@ app.MapGet("/api/group-policies", (HttpContext context) => GetPolicies(CurrentOr
 
 app.MapPut("/api/group-policies", async (GroupPoliciesRequest request, HttpContext context) =>
 {
-    if (request.Grupos.Any(x => x.MargenEntradaMinutos is < 0 or > 180 || x.MargenSalidaMinutos is < 0 or > 180))
-        return Results.BadRequest(new { error = "Los margenes deben estar entre 0 y 180 minutos." });
+    List<GroupPolicy> policies = request.Grupos.Select(x => new GroupPolicy { Grupo = x.Grupo?.Trim() ?? "", MargenEntradaMinutos = x.MargenEntradaMinutos, MargenSalidaMinutos = x.MargenSalidaMinutos }).ToList();
+    if (policies.Count is < 1 or > 50 || policies.Any(x => x.Grupo.Length is < 1 or > 60 || x.MargenEntradaMinutos is < 0 or > 180 || x.MargenSalidaMinutos is < 0 or > 180) ||
+        policies.Select(x => x.Grupo).Distinct(StringComparer.OrdinalIgnoreCase).Count() != policies.Count)
+        return Results.BadRequest(new { error = "Definí entre 1 y 50 grupos con nombres únicos; los márgenes deben estar entre 0 y 180 minutos." });
     Guid organizationId = CurrentOrganization(context);
-    List<GroupPolicy> policies = request.Grupos.Where(x => new[] { "Grupo 1", "Grupo 2", "Grupo 3" }.Contains(x.Grupo)).ToList();
+    string[] removedInUse = agents.Values.Where(x => x.OrganizationId == organizationId)
+        .Select(x => x.Grupo).Distinct(StringComparer.OrdinalIgnoreCase)
+        .Where(x => !policies.Any(p => p.Grupo.Equals(x, StringComparison.OrdinalIgnoreCase))).ToArray();
+    if (removedInUse.Length > 0) return Results.BadRequest(new { error = $"No podés eliminar grupos con equipos asignados: {string.Join(", ", removedInUse)}." });
     policiesByOrganization[organizationId] = policies;
     await SaveOrganizationStateAsync("group-policies", organizationId, policiesPath, policies);
     await RegistrarEventoAsync("SERVER", "Servidor ARES", "POLITICAS_GRUPO_ACTUALIZADAS", "Se actualizaron los margenes de entrada y salida.", organizationId);
@@ -919,7 +934,7 @@ AgentStatus? FindAgent(HttpContext context, string id) => agents.TryGetValue(Org
 ScheduleState GetSchedule(Guid organizationId) => schedules.GetOrAdd(organizationId, _ => new ScheduleState());
 List<ScheduleRevision> GetScheduleHistory(Guid organizationId) => scheduleHistories.GetOrAdd(organizationId, _ => []);
 List<GroupPolicy> GetPolicies(Guid organizationId) => policiesByOrganization.GetOrAdd(organizationId, _ =>
-    [new() { Grupo = "Grupo 1" }, new() { Grupo = "Grupo 2" }, new() { Grupo = "Grupo 3" }]);
+    [new() { Grupo = "General" }]);
 bool IsOwner(HttpContext context) => context.Items["AresAdmin"] is AuthenticatedAdmin admin && admin.Role == "Owner";
 bool ValidRole(string role) => role is "Owner" or "Administrator" or "Supervisor" or "Viewer";
 byte[] HashInvitationCode(string? code) => SHA256.HashData(Encoding.UTF8.GetBytes((code ?? "").Trim().ToUpperInvariant()));

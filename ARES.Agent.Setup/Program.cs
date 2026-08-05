@@ -236,5 +236,5 @@ internal sealed class EnrollmentResponse
 {
     public string Credential { get; set; } = "";
     public Guid OrganizationId { get; set; }
-    public string Group { get; set; } = "Grupo 1";
+    public string Group { get; set; } = "General";
 }

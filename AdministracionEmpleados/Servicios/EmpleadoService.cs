@@ -65,6 +65,7 @@ namespace AdministracionEmpleados.Servicios
                 empleado.Computadora.ActualizacionDisponible = agente.ActualizacionDisponible;
                 empleado.Computadora.Version = agente.Version;
                 empleado.Computadora.UltimaVersion = agente.UltimaVersion;
+                empleado.Computadora.CredencialIndividual = agente.CredencialIndividual;
             }
         }
     }

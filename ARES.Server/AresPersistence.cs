@@ -55,6 +55,7 @@ internal sealed class AresPersistence
                 name varchar(120) not null,
                 slug varchar(80) not null unique,
                 enabled boolean not null default true,
+                rotation_requested boolean not null default false,
                 created_at timestamptz not null default now(),
                 updated_at timestamptz not null default now()
             );
@@ -137,6 +138,7 @@ internal sealed class AresPersistence
                 machine_name varchar(100) not null,
                 assigned_group varchar(20) not null default 'Grupo 1',
                 credential_hash bytea not null unique,
+                previous_credential_hash bytea,
                 enabled boolean not null default true,
                 enrollment_id uuid,
                 enrolled_at timestamptz not null default now(),
@@ -144,6 +146,8 @@ internal sealed class AresPersistence
                 primary key (organization_id, device_id)
             );
             alter table ares_devices add column if not exists assigned_group varchar(20) not null default 'Grupo 1';
+            alter table ares_devices add column if not exists rotation_requested boolean not null default false;
+            alter table ares_devices add column if not exists previous_credential_hash bytea;
 
             alter table ares_state enable row level security;
             alter table ares_admin_users enable row level security;
@@ -413,7 +417,9 @@ internal sealed class AresPersistence
             insert into ares_devices(organization_id,device_id,machine_name,assigned_group,credential_hash,enabled,enrollment_id,enrolled_at,last_seen_at)
             values(@organization,@device,@machine,@group,@credential,true,@enrollment,now(),now())
             on conflict(organization_id,device_id) do update set machine_name=excluded.machine_name,
-                assigned_group=excluded.assigned_group,credential_hash=excluded.credential_hash,enabled=true,enrollment_id=excluded.enrollment_id,enrolled_at=now(),last_seen_at=now()
+                assigned_group=excluded.assigned_group,credential_hash=excluded.credential_hash,
+                previous_credential_hash=null,rotation_requested=false,enabled=true,
+                enrollment_id=excluded.enrollment_id,enrolled_at=now(),last_seen_at=now()
             """;
         command.Parameters.AddWithValue("organization", organizationId); command.Parameters.AddWithValue("device", deviceId);
         command.Parameters.AddWithValue("machine", machineName); command.Parameters.AddWithValue("credential", credentialHash);
@@ -427,7 +433,7 @@ internal sealed class AresPersistence
         if (!UsesDatabase) return null;
         await using var connection = new NpgsqlConnection(connectionString); await connection.OpenAsync();
         await using var command = connection.CreateCommand();
-        command.CommandText = "select organization_id,device_id,assigned_group from ares_devices where credential_hash=@hash and enabled=true";
+        command.CommandText = "select organization_id,device_id,assigned_group from ares_devices where enabled=true and (credential_hash=@hash or (rotation_requested and previous_credential_hash=@hash))";
         command.Parameters.AddWithValue("hash", credentialHash);
         await using var reader = await command.ExecuteReaderAsync();
         return await reader.ReadAsync() ? new DeviceIdentity(reader.GetGuid(0), reader.GetString(1), reader.GetString(2)) : null;
@@ -454,6 +460,48 @@ internal sealed class AresPersistence
             restore.Parameters.AddWithValue("id", enrollmentId.Value); await restore.ExecuteNonQueryAsync();
         }
         await transaction.CommitAsync();
+    }
+
+    public async Task<bool> RequestDeviceRotationAsync(Guid organizationId, string deviceId)
+    {
+        await using var connection = new NpgsqlConnection(connectionString); await connection.OpenAsync();
+        await using var command = connection.CreateCommand();
+        command.CommandText = "update ares_devices set rotation_requested=true where organization_id=@organization and device_id=@device and enabled=true";
+        command.Parameters.AddWithValue("organization", organizationId); command.Parameters.AddWithValue("device", deviceId);
+        return await command.ExecuteNonQueryAsync() == 1;
+    }
+
+    public async Task<bool> RotateDeviceCredentialAsync(Guid organizationId, string deviceId, byte[] currentHash, byte[] newHash)
+    {
+        await using var connection = new NpgsqlConnection(connectionString); await connection.OpenAsync();
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            update ares_devices set previous_credential_hash=coalesce(previous_credential_hash,credential_hash),
+                credential_hash=@new_hash,last_seen_at=now()
+            where organization_id=@organization and device_id=@device
+                and (credential_hash=@current_hash or previous_credential_hash=@current_hash)
+                and enabled=true and rotation_requested=true
+            """;
+        command.Parameters.AddWithValue("organization", organizationId); command.Parameters.AddWithValue("device", deviceId);
+        command.Parameters.AddWithValue("current_hash", currentHash); command.Parameters.AddWithValue("new_hash", newHash);
+        return await command.ExecuteNonQueryAsync() == 1;
+    }
+
+    public async Task CompleteDeviceRotationAsync(byte[] credentialHash)
+    {
+        await using var connection = new NpgsqlConnection(connectionString); await connection.OpenAsync();
+        await using var command = connection.CreateCommand();
+        command.CommandText = "update ares_devices set rotation_requested=false,previous_credential_hash=null where credential_hash=@hash and previous_credential_hash is not null and rotation_requested=true";
+        command.Parameters.AddWithValue("hash", credentialHash); await command.ExecuteNonQueryAsync();
+    }
+
+    public async Task<bool> RevokeDeviceAsync(Guid organizationId, string deviceId)
+    {
+        await using var connection = new NpgsqlConnection(connectionString); await connection.OpenAsync();
+        await using var command = connection.CreateCommand();
+        command.CommandText = "update ares_devices set enabled=false,rotation_requested=false,previous_credential_hash=null where organization_id=@organization and device_id=@device and enabled=true";
+        command.Parameters.AddWithValue("organization", organizationId); command.Parameters.AddWithValue("device", deviceId);
+        return await command.ExecuteNonQueryAsync() == 1;
     }
 
     public async Task<T?> LoadAsync<T>(string key)

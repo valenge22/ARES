@@ -270,6 +270,7 @@ namespace AdministracionEmpleados
             tabla.Columns.Add(new DataGridViewButtonColumn { Name = "ActualizarAgente", HeaderText = "VERSION", FillWeight = 65, FlatStyle = FlatStyle.Flat });
             tabla.Columns.Add(new DataGridViewButtonColumn { Name = "Renombrar", HeaderText = "", Text = "Cambiar nombre", UseColumnTextForButtonValue = true, FillWeight = 85, FlatStyle = FlatStyle.Flat });
             tabla.Columns.Add(new DataGridViewButtonColumn { Name = "Ver", HeaderText = "", Text = "Ver", UseColumnTextForButtonValue = true, FillWeight = 55, FlatStyle = FlatStyle.Flat });
+            tabla.Columns.Add(new DataGridViewButtonColumn { Name = "Credencial", HeaderText = "", Text = "Seguridad", UseColumnTextForButtonValue = true, FillWeight = 70, FlatStyle = FlatStyle.Flat });
             tabla.Columns.Add(new DataGridViewButtonColumn { Name = "Accion", HeaderText = "ACCIÓN", FillWeight = 85, FlatStyle = FlatStyle.Flat });
 
             foreach (Empleado empleado in empleadoService.ObtenerEmpleados().Where(x => grupoVisible == "Todos" || x.Grupo == grupoVisible).OrderBy(x => x.Grupo).ThenBy(x => x.Nombre))
@@ -281,7 +282,7 @@ namespace AdministracionEmpleados
                     empleado.Nombre, pc.DireccionIP,
                     pc.SolicitudDesbloqueoPendiente ? "🔔 Desbloqueo solicitado" : "—",
                     pc.MotivoBloqueo + (pc.ProximoCambioUtc.HasValue ? $"\n{pc.ProximoCambioUtc.Value.ToLocalTime():dd/MM HH:mm}" : ""),
-                    empleado.Grupo, "Mover", "Excepcion", pc.ActualizacionDisponible ? $"Actualizar {pc.UltimaVersion}" : $"v{pc.Version}", "Cambiar nombre", "Ver",
+                    empleado.Grupo, "Mover", "Excepcion", pc.ActualizacionDisponible ? $"Actualizar {pc.UltimaVersion}" : $"v{pc.Version}", "Cambiar nombre", "Ver", "Seguridad",
                     pc.EstaBloqueada ? "Desbloquear" : "Bloquear");
                 tabla.Rows[fila].Tag = empleado;
                 tabla.Rows[fila].Cells[0].Style.ForeColor = pc.EstaEncendida
@@ -339,6 +340,33 @@ namespace AdministracionEmpleados
                     Computadora pc = empleado.Computadora;
                     MessageBox.Show($"Equipo: {pc.Nombre}\nUsuario: {empleado.Nombre}\nIP: {pc.DireccionIP}\nSistema: {pc.SistemaOperativo}\nEstado: {(pc.EstaEncendida ? "En línea" : "Sin conexión")}",
                         "Detalle del equipo", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                }
+                else if (tabla.Columns[e.ColumnIndex].Name == "Credencial")
+                {
+                    Computadora pc = empleado.Computadora;
+                    if (!pc.CredencialIndividual)
+                    {
+                        MessageBox.Show("Este equipo todavía utiliza la clave compartida anterior. Para administrarlo individualmente debe vincularse con el instalador nuevo.", "ARES", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                        return;
+                    }
+                    DialogResult choice = MessageBox.Show(
+                        $"Seguridad de {pc.Nombre}\n\nSí: renovar la credencial de forma remota.\nNo: revocar el acceso de este equipo.\nCancelar: no realizar cambios.",
+                        "Credencial del equipo", MessageBoxButtons.YesNoCancel, MessageBoxIcon.Warning);
+                    try
+                    {
+                        if (choice == DialogResult.Yes)
+                        {
+                            await discoveryService.RenovarCredencialEquipoAsync(pc.AgentId);
+                            MessageBox.Show("Renovación solicitada. Se completará automáticamente cuando el servicio ARES se conecte.", "ARES", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                        }
+                        else if (choice == DialogResult.No)
+                        {
+                            if (MessageBox.Show("La PC perderá acceso al servidor inmediatamente y necesitará un nuevo código de vinculación. ¿Continuar?", "Revocar equipo", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes) return;
+                            await discoveryService.RevocarCredencialEquipoAsync(pc.AgentId);
+                            await BuscarEquiposAsync();
+                        }
+                    }
+                    catch (Exception ex) { MessageBox.Show($"No se pudo modificar la credencial.\n\n{ex.Message}", "ARES", MessageBoxButtons.OK, MessageBoxIcon.Error); }
                 }
                 else if (tabla.Columns[e.ColumnIndex].Name == "Accion")
                 {

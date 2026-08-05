@@ -18,4 +18,12 @@ internal sealed class AgentSettings
         return JsonSerializer.Deserialize<AgentSettings>(File.ReadAllText(ruta),
             new JsonSerializerOptions { PropertyNameCaseInsensitive = true }) ?? new AgentSettings();
     }
+
+    public void Guardar()
+    {
+        string ruta = Path.Combine(AppContext.BaseDirectory, "appsettings.json");
+        string temporal = ruta + ".tmp";
+        File.WriteAllText(temporal, JsonSerializer.Serialize(this, new JsonSerializerOptions { WriteIndented = true }));
+        File.Move(temporal, ruta, true);
+    }
 }

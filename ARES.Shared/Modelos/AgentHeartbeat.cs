@@ -32,6 +32,7 @@ public sealed class AgentStatus : AgentHeartbeat
     public string UltimaVersion { get; set; } = "";
     public bool ActualizacionSolicitada { get; set; }
     public bool HorarioPendienteSincronizar { get; set; }
+    public bool CredencialIndividual { get; set; }
 }
 
 public sealed class RenameAgentRequest
@@ -53,6 +54,7 @@ public sealed class HeartbeatResponse
     public string UltimaVersion { get; set; } = "";
     public string UrlActualizacion { get; set; } = "";
     public bool ActualizarAhora { get; set; }
+    public string NuevaCredencialDispositivo { get; set; } = "";
 }
 
 public sealed class RestrictionRequest

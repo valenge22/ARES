@@ -96,7 +96,11 @@ app.Use(async (context, next) =>
     bool validApiKey = context.Request.Headers.TryGetValue("X-ARES-Key", out var supplied) && supplied == apiKey;
     DeviceIdentity? deviceIdentity = null;
     if (context.Request.Headers.TryGetValue("X-ARES-Device", out var deviceCredential) && !string.IsNullOrWhiteSpace(deviceCredential))
-        deviceIdentity = await persistence.ValidateDeviceAsync(HashSecret(deviceCredential.ToString()));
+    {
+        byte[] deviceHash = HashSecret(deviceCredential.ToString());
+        deviceIdentity = await persistence.ValidateDeviceAsync(deviceHash);
+        if (deviceIdentity is not null) await persistence.CompleteDeviceRotationAsync(deviceHash);
+    }
     AuthenticatedAdmin? admin = null;
     string authorization = context.Request.Headers.Authorization.ToString();
     if (authorization.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
@@ -278,6 +282,24 @@ app.MapDelete("/api/admin/device-enrollments/{id:guid}", async (Guid id, HttpCon
     if (!IsOwner(context)) return Results.Forbid();
     await persistence.RevokeDeviceEnrollmentAsync(id, CurrentOrganization(context)); return Results.Ok(new { revoked = true });
 });
+app.MapPost("/api/admin/devices/{id}/rotate", async (string id, HttpContext context) =>
+{
+    if (!IsOwner(context)) return Results.Forbid();
+    bool requested = await persistence.RequestDeviceRotationAsync(CurrentOrganization(context), id);
+    if (!requested) return Results.NotFound(new { error = "El equipo no está vinculado o ya fue revocado." });
+    await RegistrarEventoAsync(id, id, "CREDENCIAL_RENOVACION_SOLICITADA", "La renovación se aplicará cuando el servicio del equipo se conecte.", CurrentOrganization(context));
+    return Results.Ok(new { requested = true });
+});
+app.MapDelete("/api/admin/devices/{id}", async (string id, HttpContext context) =>
+{
+    if (!IsOwner(context)) return Results.Forbid();
+    bool revoked = await persistence.RevokeDeviceAsync(CurrentOrganization(context), id);
+    if (!revoked) return Results.NotFound(new { error = "El equipo no está vinculado o ya fue revocado." });
+    if (FindAgent(context, id) is AgentStatus agent) agent.EstaEnLinea = false;
+    await RegistrarEventoAsync(id, id, "CREDENCIAL_REVOCADA", "El servidor dejó de aceptar la credencial del equipo.", CurrentOrganization(context));
+    await GuardarAsync();
+    return Results.Ok(new { revoked = true });
+});
 
 app.MapPost("/api/agents/enroll", async (EnrollDeviceRequest request) =>
 {
@@ -412,6 +434,7 @@ app.MapPost("/api/agents/heartbeat", async (AgentHeartbeat heartbeat, HttpContex
             BloqueadoAdministrativamente = false,
             RequestToken = heartbeat.RequestToken
             , Grupo = context.Items["AresDeviceGroup"] as string ?? "Grupo 1"
+            , CredencialIndividual = context.Items["AresDeviceId"] is string
         },
         (_, existente) =>
         {
@@ -426,6 +449,7 @@ app.MapPost("/api/agents/heartbeat", async (AgentHeartbeat heartbeat, HttpContex
             existente.BloqueadoLocalmente = heartbeat.BloqueadoLocalmente;
             existente.UltimaConexionUtc = ahora;
             existente.EstaEnLinea = true;
+            existente.CredencialIndividual = context.Items["AresDeviceId"] is string;
             if (!string.IsNullOrWhiteSpace(heartbeat.RequestToken))
                 existente.RequestToken = heartbeat.RequestToken;
             return existente;
@@ -437,6 +461,17 @@ app.MapPost("/api/agents/heartbeat", async (AgentHeartbeat heartbeat, HttpContex
     GroupPolicy policy = GetPolicies(organizationId).FirstOrDefault(p => p.Grupo == agenteActual.Grupo) ?? new();
     bool actualizarAhora = agenteActual.ActualizacionSolicitada && heartbeat.EsServicioSistema;
     if (actualizarAhora) agenteActual.ActualizacionSolicitada = false;
+    string nuevaCredencial = "";
+    if (heartbeat.EsServicioSistema && context.Request.Headers.TryGetValue("X-ARES-Device", out var credencialActual))
+    {
+        string candidata = RandomNumberGenerator.GetHexString(32);
+        if (await persistence.RotateDeviceCredentialAsync(organizationId, heartbeat.Id,
+            HashSecret(credencialActual.ToString()), HashSecret(candidata)))
+        {
+            nuevaCredencial = candidata;
+            await RegistrarEventoAsync(heartbeat.Id, heartbeat.Equipo, "CREDENCIAL_RENOVADA", "La credencial única del equipo fue renovada.", organizationId);
+        }
+    }
     return Results.Ok(new HeartbeatResponse
     {
         Accepted = true,
@@ -453,6 +488,7 @@ app.MapPost("/api/agents/heartbeat", async (AgentHeartbeat heartbeat, HttpContex
             ? $"{context.Request.Scheme}://{context.Request.Host}/api/update-package/download"
             : agentUpdateUrl
         ,ActualizarAhora = actualizarAhora
+        ,NuevaCredencialDispositivo = nuevaCredencial
     });
 });
 
@@ -694,6 +730,7 @@ app.MapGet("/api/agents", (HttpContext context) =>
             ,ActualizacionDisponible = Version.TryParse(latestAgentVersion, out var latest) && Version.TryParse(a.Version, out var current) && latest > current
             ,UltimaVersion = latestAgentVersion
             ,HorarioPendienteSincronizar = HorarioPendiente(a)
+            ,CredencialIndividual = a.CredencialIndividual
         })
         .OrderBy(a => a.Equipo);
 });

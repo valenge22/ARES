@@ -48,6 +48,15 @@ public sealed class NetworkService : IDisposable
                 HeartbeatResponse? politica = await respuesta.Content.ReadFromJsonAsync<HeartbeatResponse>(cancellationToken: cancelacion);
                 if (politica != null)
                 {
+                    if (!string.IsNullOrWhiteSpace(politica.NuevaCredencialDispositivo))
+                    {
+                        configuracion.DeviceCredential = politica.NuevaCredencialDispositivo;
+                        configuracion.ApiKey = "";
+                        configuracion.Guardar();
+                        cliente.DefaultRequestHeaders.Remove("X-ARES-Device");
+                        cliente.DefaultRequestHeaders.Remove("X-ARES-Key");
+                        cliente.DefaultRequestHeaders.Add("X-ARES-Device", configuracion.DeviceCredential);
+                    }
                     schedule.Update(politica);
                     PolicyDecision decision = schedule.Evaluate(politica.BloqueadoAdministrativamente, politica.ServerTimeUtc);
                     motivoActual = decision.Reason;

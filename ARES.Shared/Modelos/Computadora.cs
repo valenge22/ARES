@@ -17,5 +17,6 @@
         public bool ActualizacionDisponible { get; set; }
         public string Version { get; set; } = "";
         public string UltimaVersion { get; set; } = "";
+        public bool CredencialIndividual { get; set; }
     }
 }

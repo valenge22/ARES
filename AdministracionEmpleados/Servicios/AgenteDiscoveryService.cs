@@ -10,7 +10,7 @@ namespace AdministracionEmpleados.Servicios;
 public sealed record AgenteDetectado(string Id, string Equipo, string Usuario, string DireccionIp,
     string Sistema, bool Bloqueado, bool SolicitudDesbloqueo, DateTimeOffset? SolicitudUtc, string Grupo,
     string MotivoBloqueo, DateTimeOffset? ProximoCambioUtc, DateTimeOffset? ExcepcionHastaUtc,
-    bool ActualizacionDisponible, string Version, string UltimaVersion, bool HorarioPendiente);
+    bool ActualizacionDisponible, string Version, string UltimaVersion, bool HorarioPendiente, bool CredencialIndividual);
 
 public sealed class AgenteDiscoveryService
 {
@@ -34,7 +34,7 @@ public sealed class AgenteDiscoveryService
                 string.IsNullOrWhiteSpace(a.NombrePersonalizado) ? a.Equipo : a.NombrePersonalizado,
                 a.Usuario, "Remoto", a.Sistema,
                 a.BloqueadoAdministrativamente, a.SolicitudDesbloqueoPendiente, a.SolicitudDesbloqueoUtc, a.Grupo,
-                a.MotivoBloqueo, a.ProximoCambioUtc, a.ExcepcionHastaUtc, a.ActualizacionDisponible, a.Version, a.UltimaVersion, a.HorarioPendienteSincronizar))
+                a.MotivoBloqueo, a.ProximoCambioUtc, a.ExcepcionHastaUtc, a.ActualizacionDisponible, a.Version, a.UltimaVersion, a.HorarioPendienteSincronizar, a.CredencialIndividual))
             .ToList();
     }
     public async Task EstablecerGrupoAsync(string agentId, string grupo, CancellationToken cancelacion = default)
@@ -243,5 +243,17 @@ public sealed class AgenteDiscoveryService
     {
         using HttpClient client = CrearCliente(); using HttpResponseMessage response = await client.PostAsJsonAsync($"{AresSettings.Cargar().ServerUrl.TrimEnd('/')}/api/admin/device-enrollments", new { maxUses, durationHours, group }, cancelacion); response.EnsureSuccessStatusCode();
         return await response.Content.ReadFromJsonAsync<CreatedDeviceEnrollment>(cancelacion) ?? throw new InvalidDataException("Respuesta de vinculación inválida.");
+    }
+    public async Task RenovarCredencialEquipoAsync(string id, CancellationToken cancelacion = default)
+    {
+        using HttpClient client = CrearCliente();
+        using HttpResponseMessage response = await client.PostAsync($"{AresSettings.Cargar().ServerUrl.TrimEnd('/')}/api/admin/devices/{Uri.EscapeDataString(id)}/rotate", null, cancelacion);
+        response.EnsureSuccessStatusCode();
+    }
+    public async Task RevocarCredencialEquipoAsync(string id, CancellationToken cancelacion = default)
+    {
+        using HttpClient client = CrearCliente();
+        using HttpResponseMessage response = await client.DeleteAsync($"{AresSettings.Cargar().ServerUrl.TrimEnd('/')}/api/admin/devices/{Uri.EscapeDataString(id)}", cancelacion);
+        response.EnsureSuccessStatusCode();
     }
 }

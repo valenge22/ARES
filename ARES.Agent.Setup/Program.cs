@@ -127,6 +127,7 @@ internal sealed class SetupForm : Form
             start.ArgumentList.Add("-ManagedUser"); start.ArgumentList.Add(employee.Text.Trim());
             start.ArgumentList.Add("-InstallerAdminUser"); start.ArgumentList.Add(Environment.UserName);
             start.ArgumentList.Add("-ProvisionStandardUser"); start.ArgumentList.Add("-NonInteractiveProvisioning");
+            if (useExisting.Checked) start.ArgumentList.Add("-UseExistingStandardUser");
             start.ArgumentList.Add("-LogPath"); start.ArgumentList.Add(Path.Combine(Path.GetTempPath(), "ARES-Agent-Install.log"));
             if (!useExisting.Checked)
                 start.Environment["ARES_SETUP_EMPLOYEE_PASSWORD"] = employeePassword.Text;

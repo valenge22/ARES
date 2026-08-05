@@ -5,6 +5,7 @@ param(
     [string]$ManagedUser = '',
     [string]$InstallerAdminUser = $env:USERNAME,
     [switch]$ProvisionStandardUser,
+    [switch]$UseExistingStandardUser,
     [switch]$NonInteractiveProvisioning,
     [string]$LogPath = (Join-Path $env:TEMP 'ARES-Agent-Install.log')
 )
@@ -54,6 +55,7 @@ if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administra
         '-LogPath', ('"' + $LogPath + '"')
     )
     if ($ProvisionStandardUser) { $argumentosElevados += '-ProvisionStandardUser' }
+    if ($UseExistingStandardUser) { $argumentosElevados += '-UseExistingStandardUser' }
     if ($NonInteractiveProvisioning) { $argumentosElevados += '-NonInteractiveProvisioning' }
     $procesoElevado = Start-Process powershell.exe -Verb RunAs -Wait -PassThru -ArgumentList $argumentosElevados
     exit $procesoElevado.ExitCode
@@ -106,6 +108,9 @@ if ($ProvisionStandardUser) {
     }
 
     $cuentaEmpleado = Get-LocalUser -Name $usuarioAdministrado -ErrorAction SilentlyContinue
+    if ($UseExistingStandardUser -and -not $cuentaEmpleado) {
+        throw "La cuenta estándar '$usuarioAdministrado' no existe en esta computadora. Revisá el nombre o desmarcá 'usar una cuenta existente' para que ARES la cree."
+    }
     if (-not $cuentaEmpleado) {
         Write-Host "Creando la cuenta estandar '$usuarioAdministrado'..."
         $claveEmpleado = Read-ConfirmedPassword 'Contrasena inicial para el empleado' 'ARES_SETUP_EMPLOYEE_PASSWORD'

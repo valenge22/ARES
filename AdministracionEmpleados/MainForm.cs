@@ -6,6 +6,14 @@ namespace AdministracionEmpleados
 {
     public partial class MainForm : Form
     {
+        private static void DibujarEscudoMarca(object? sender, PaintEventArgs e)
+        {
+            e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+            using var path = new System.Drawing.Drawing2D.GraphicsPath();
+            path.AddLines([new PointF(19, 3), new PointF(32, 8), new PointF(31, 21), new PointF(27, 29), new PointF(19, 35), new PointF(11, 29), new PointF(7, 21), new PointF(6, 8), new PointF(19, 3)]);
+            using var pen = new Pen(Color.FromArgb(56, 189, 248), 2.2F) { LineJoin = System.Drawing.Drawing2D.LineJoin.Round };
+            e.Graphics.DrawPath(pen, path);
+        }
         private readonly EmpleadoService empleadoService = new();
         private readonly AgenteDiscoveryService discoveryService = new();
         private readonly AuditCacheService auditCacheService = new();

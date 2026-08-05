@@ -63,31 +63,34 @@ namespace AdministracionEmpleados
             pnlMenu.Controls.Add(pnlMarca);
 
             pnlMarca.Dock = DockStyle.Top;
-            pnlMarca.Height = 76;
+            pnlMarca.Height = 88;
             pnlMarca.BackColor = Color.FromArgb(11, 35, 64);
             pnlMarca.Controls.Add(lblEscudo);
             pnlMarca.Controls.Add(lblARES);
             pnlMarca.Controls.Add(lblVersion);
 
-            lblEscudo.AutoSize = true;
-            lblEscudo.Font = new Font("Segoe UI Emoji", 21F);
+            lblEscudo.AutoSize = false;
+            lblEscudo.Size = new Size(38, 38);
+            lblEscudo.Font = new Font("Segoe UI Symbol", 23F);
             lblEscudo.ForeColor = Color.FromArgb(56, 189, 248);
             lblEscudo.BackColor = Color.Transparent;
-            lblEscudo.Location = new Point(17, 17);
-            lblEscudo.Text = "🛡";
+            lblEscudo.Location = new Point(16, 18);
+            lblEscudo.Text = "";
+            lblEscudo.TextAlign = ContentAlignment.MiddleCenter;
+            lblEscudo.Paint += DibujarEscudoMarca;
 
             lblARES.AutoSize = true;
             lblARES.Font = new Font("Segoe UI", 19F, FontStyle.Bold);
             lblARES.ForeColor = Color.White;
             lblARES.BackColor = Color.Transparent;
-            lblARES.Location = new Point(59, 14);
+            lblARES.Location = new Point(62, 10);
             lblARES.Text = "ARES";
 
             lblVersion.AutoSize = true;
             lblVersion.Font = new Font("Segoe UI", 9F);
             lblVersion.ForeColor = Color.FromArgb(125, 211, 252);
             lblVersion.BackColor = Color.Transparent;
-            lblVersion.Location = new Point(61, 45);
+            lblVersion.Location = new Point(64, 57);
             lblVersion.Text = "CENTRO DE CONTROL";
 
             flpNavegacion.Dock = DockStyle.Fill;

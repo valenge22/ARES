@@ -37,17 +37,26 @@ internal sealed class LoginWindow : Window
 
     private async Task RegisterAsync()
     {
+        var mode = new ComboBox { ItemsSource = new[] { "Crear una organización nueva", "Unirme con un código de invitación" }, SelectedIndex = 0 };
         var name = new TextBox { PlaceholderText = "Nombre" }; var mail = new TextBox { PlaceholderText = "Correo" };
         var pass = new TextBox { PlaceholderText = "Contraseña (mínimo 8)", PasswordChar = '●' }; var confirm = new TextBox { PlaceholderText = "Repetir contraseña", PasswordChar = '●' };
-        var code = new TextBox { PlaceholderText = "Código de invitación", PasswordChar = '●' }; var message = new TextBlock { TextWrapping = TextWrapping.Wrap };
+        var organization = new TextBox { PlaceholderText = "Nombre de la empresa u organización" };
+        var code = new TextBox { PlaceholderText = "Código de invitación", PasswordChar = '●', IsVisible = false }; var message = new TextBlock { TextWrapping = TextWrapping.Wrap };
         var create = new Button { Content = "Crear cuenta", Background = Brush.Parse("#2563EB"), Foreground = Brushes.White };
-        var dialog = new Window { Title = "Crear cuenta ARES", Width = 450, Height = 460, WindowStartupLocation = WindowStartupLocation.CenterOwner,
-            Content = new StackPanel { Margin = new Thickness(30), Spacing = 12, Children = { name, mail, pass, confirm, code, create, message } } };
+        var dialog = new Window { Title = "Crear cuenta ARES", Width = 450, Height = 540, WindowStartupLocation = WindowStartupLocation.CenterOwner,
+            Content = new StackPanel { Margin = new Thickness(30), Spacing = 12, Children = { mode, organization, name, mail, pass, confirm, code, create, message } } };
+        mode.SelectionChanged += (_, _) => { bool joining = mode.SelectedIndex == 1; organization.IsVisible = !joining; code.IsVisible = joining; create.Content = joining ? "Solicitar acceso" : "Crear organización"; };
         create.Click += async (_, _) =>
         {
             if (pass.Text != confirm.Text) { message.Text = "Las contraseñas no coinciden."; return; }
             create.IsEnabled = false;
-            try { var result = await MacControlAuth.Client.RegisterAsync(name.Text?.Trim() ?? "", mail.Text?.Trim() ?? "", pass.Text ?? "", code.Text ?? ""); message.Text = result.Message; if (result.Success) message.Foreground = Brush.Parse("#15803D"); }
+            try
+            {
+                bool joining = mode.SelectedIndex == 1;
+                var result = await MacControlAuth.Client.RegisterAsync(name.Text?.Trim() ?? "", mail.Text?.Trim() ?? "", pass.Text ?? "",
+                    joining ? code.Text ?? "" : "", joining ? "" : organization.Text?.Trim() ?? "");
+                message.Text = result.Message; if (result.Success) message.Foreground = Brush.Parse("#15803D");
+            }
             catch (Exception ex) { message.Text = ex.Message; }
             finally { create.IsEnabled = true; }
         };

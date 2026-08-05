@@ -43,11 +43,11 @@ public sealed class ControlAuthClient
         return Apply(auth);
     }
 
-    public async Task<(bool Success, string Message)> RegisterAsync(string name, string email, string password, string invitationCode, CancellationToken cancellationToken = default)
+    public async Task<(bool Success, string Message)> RegisterAsync(string name, string email, string password, string invitationCode, string organizationName = "", CancellationToken cancellationToken = default)
     {
         using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
         using HttpResponseMessage response = await http.PostAsJsonAsync($"{serverUrl().TrimEnd('/')}/api/auth/register",
-            new { displayName = name, email, password, invitationCode }, cancellationToken);
+            new { displayName = name, email, password, invitationCode, organizationName }, cancellationToken);
         ApiMessage? message = await response.Content.ReadFromJsonAsync<ApiMessage>(cancellationToken);
         return (response.IsSuccessStatusCode, message?.Message ?? message?.Error ?? (response.IsSuccessStatusCode ? "Cuenta creada." : "No se pudo crear la cuenta."));
     }

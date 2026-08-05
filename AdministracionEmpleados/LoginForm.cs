@@ -42,21 +42,32 @@ internal sealed class LoginForm : Form
 
     private async Task RegisterAsync()
     {
-        using var dialog = new Form { Text = "Crear cuenta ARES", Width = 440, Height = 430, StartPosition = FormStartPosition.CenterParent, FormBorderStyle = FormBorderStyle.FixedDialog, MaximizeBox = false };
+        using var dialog = new Form { Text = "Crear cuenta ARES", Width = 440, Height = 520, StartPosition = FormStartPosition.CenterParent, FormBorderStyle = FormBorderStyle.FixedDialog, MaximizeBox = false };
+        var mode = new ComboBox { Width = 340, DropDownStyle = ComboBoxStyle.DropDownList };
+        mode.Items.AddRange(["Crear una organización nueva", "Unirme con un código de invitación"]); mode.SelectedIndex = 0;
         var name = new TextBox { PlaceholderText = "Nombre", Width = 340 }; var mail = new TextBox { PlaceholderText = "Correo", Width = 340 };
         var pass = new TextBox { PlaceholderText = "Contraseña (mínimo 8 caracteres)", UseSystemPasswordChar = true, Width = 340 };
         var confirm = new TextBox { PlaceholderText = "Repetir contraseña", UseSystemPasswordChar = true, Width = 340 };
-        var code = new TextBox { PlaceholderText = "Código de invitación", UseSystemPasswordChar = true, Width = 340 };
+        var organization = new TextBox { PlaceholderText = "Nombre de la empresa u organización", Width = 340 };
+        var code = new TextBox { PlaceholderText = "Código de invitación", UseSystemPasswordChar = true, Width = 340, Visible = false };
         var message = new Label { Width = 340, Height = 45, TextAlign = ContentAlignment.MiddleCenter };
         var create = new Button { Text = "Crear cuenta", Width = 340, Height = 40, BackColor = Color.FromArgb(37, 99, 235), ForeColor = Color.White, FlatStyle = FlatStyle.Flat };
         var stack = new FlowLayoutPanel { FlowDirection = FlowDirection.TopDown, WrapContents = false, AutoSize = true, Location = new Point(40, 25) };
-        foreach (Control item in new Control[] { name, mail, pass, confirm, code, create, message }) { item.Margin = new Padding(0, 5, 0, 5); stack.Controls.Add(item); }
+        foreach (Control item in new Control[] { mode, organization, name, mail, pass, confirm, code, create, message }) { item.Margin = new Padding(0, 5, 0, 5); stack.Controls.Add(item); }
         dialog.Controls.Add(stack);
+        mode.SelectedIndexChanged += (_, _) => { bool joining = mode.SelectedIndex == 1; organization.Visible = !joining; code.Visible = joining; create.Text = joining ? "Solicitar acceso" : "Crear organización"; };
         create.Click += async (_, _) =>
         {
             if (pass.Text != confirm.Text) { message.Text = "Las contraseñas no coinciden."; return; }
             create.Enabled = false;
-            try { var result = await AresControlAuth.Client.RegisterAsync(name.Text.Trim(), mail.Text.Trim(), pass.Text, code.Text); message.Text = result.Message; if (result.Success) { message.ForeColor = Color.Green; create.Text = "Solicitud enviada"; } }
+            try
+            {
+                bool joining = mode.SelectedIndex == 1;
+                var result = await AresControlAuth.Client.RegisterAsync(name.Text.Trim(), mail.Text.Trim(), pass.Text,
+                    joining ? code.Text : "", joining ? "" : organization.Text.Trim());
+                message.Text = result.Message;
+                if (result.Success) { message.ForeColor = Color.Green; create.Text = joining ? "Solicitud enviada" : "Organización creada"; }
+            }
             catch (Exception ex) { message.Text = ex.Message; }
             finally { create.Enabled = true; }
         };

@@ -1,4 +1,6 @@
 using System.Text.Json;
+using System.Text;
+using System.Globalization;
 using Npgsql;
 using NpgsqlTypes;
 
@@ -55,7 +57,6 @@ internal sealed class AresPersistence
                 name varchar(120) not null,
                 slug varchar(80) not null unique,
                 enabled boolean not null default true,
-                rotation_requested boolean not null default false,
                 created_at timestamptz not null default now(),
                 updated_at timestamptz not null default now()
             );
@@ -191,6 +192,40 @@ internal sealed class AresPersistence
         command.Parameters.AddWithValue("organizationId", DefaultOrganizationId);
         command.Parameters.AddWithValue("displayName", name);
         await command.ExecuteNonQueryAsync();
+    }
+
+    public async Task<Guid> CreateOrganizationOwnerAsync(Guid userId, string email, string displayName, string organizationName)
+    {
+        Guid organizationId = Guid.NewGuid();
+        string baseSlug = new string(organizationName.Trim().ToLowerInvariant().Normalize(NormalizationForm.FormD)
+            .Where(c => CharUnicodeInfo.GetUnicodeCategory(c) != UnicodeCategory.NonSpacingMark)
+            .Select(c => char.IsLetterOrDigit(c) ? c : '-')
+            .ToArray()).Trim('-');
+        while (baseSlug.Contains("--", StringComparison.Ordinal)) baseSlug = baseSlug.Replace("--", "-", StringComparison.Ordinal);
+        if (string.IsNullOrWhiteSpace(baseSlug)) baseSlug = "organizacion";
+        if (baseSlug.Length > 60) baseSlug = baseSlug[..60].TrimEnd('-');
+        string slug = $"{baseSlug}-{organizationId.ToString("N")[..8]}";
+
+        await using var connection = new NpgsqlConnection(connectionString); await connection.OpenAsync();
+        await using var transaction = await connection.BeginTransactionAsync();
+        await using var command = connection.CreateCommand(); command.Transaction = transaction;
+        command.CommandText = "insert into ares_organizations(organization_id,name,slug,enabled) values(@organization,@name,@slug,true)";
+        command.Parameters.AddWithValue("organization", organizationId); command.Parameters.AddWithValue("name", organizationName);
+        command.Parameters.AddWithValue("slug", slug); await command.ExecuteNonQueryAsync();
+        command.Parameters.Clear();
+        command.CommandText = """
+            insert into ares_admin_users(user_id,organization_id,email,display_name,role,enabled,updated_at)
+            values(@user,@organization,@email,@display,'Owner',true,now())
+            on conflict(user_id) do nothing
+            """;
+        command.Parameters.AddWithValue("user", userId); command.Parameters.AddWithValue("organization", organizationId);
+        command.Parameters.AddWithValue("email", email); command.Parameters.AddWithValue("display", displayName);
+        if (await command.ExecuteNonQueryAsync() != 1)
+        {
+            await transaction.RollbackAsync();
+            throw new InvalidOperationException("La cuenta ya pertenece a una organización ARES.");
+        }
+        await transaction.CommitAsync(); return organizationId;
     }
 
     public async Task<List<Guid>> GetOrganizationIdsAsync()

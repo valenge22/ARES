@@ -110,7 +110,7 @@ internal sealed record AuthenticatedAdmin(Guid UserId, Guid OrganizationId, stri
 internal sealed record AuthResult(string AccessToken, string RefreshToken, int ExpiresIn, AuthenticatedAdmin User);
 internal sealed record LoginRequest(string Email, string Password);
 internal sealed record RefreshRequest(string RefreshToken);
-internal sealed record RegisterRequest(string DisplayName, string Email, string Password, string InvitationCode);
+internal sealed record RegisterRequest(string DisplayName, string Email, string Password, string InvitationCode, string OrganizationName);
 internal sealed record RecoverRequest(string Email);
 internal sealed record UpdatePasswordRequest(string AccessToken, string Password);
 internal sealed record ApproveRegistrationRequest(string Role);

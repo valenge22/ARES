@@ -175,19 +175,31 @@ app.MapGet("/api/auth/me", (HttpContext context) => Results.Ok((AuthenticatedAdm
 app.MapPost("/api/auth/register", async (RegisterRequest request, HttpRequest httpRequest, CancellationToken cancellationToken) =>
 {
     string name = request.DisplayName?.Trim() ?? ""; string email = request.Email?.Trim() ?? ""; string password = request.Password ?? "";
+    string invitationCode = request.InvitationCode?.Trim() ?? ""; string organizationName = request.OrganizationName?.Trim() ?? "";
     if (name.Length is < 2 or > 80 || !email.Contains('@') || password.Length < 8)
         return Results.BadRequest(new { error = "Revisá el nombre, correo y contraseña (mínimo 8 caracteres)." });
-    InvitationGrant? invitation = await persistence.ConsumeInvitationAsync(HashInvitationCode(request.InvitationCode));
-    if (invitation is null)
-        return Results.Json(new { error = "Código de invitación inválido." }, statusCode: 403);
+    bool createOrganization = string.IsNullOrWhiteSpace(invitationCode);
+    if (createOrganization && organizationName.Length is < 2 or > 120)
+        return Results.BadRequest(new { error = "Ingresá el nombre de la empresa u organización." });
+    InvitationGrant? invitation = null;
+    if (!createOrganization)
+    {
+        invitation = await persistence.ConsumeInvitationAsync(HashInvitationCode(invitationCode));
+        if (invitation is null) return Results.Json(new { error = "Código de invitación inválido." }, statusCode: 403);
+    }
     string origin = $"{httpRequest.Scheme}://{httpRequest.Host}";
     Guid? userId = await authService.SignUpAsync(email, password, name, $"{origin}/auth/confirmed", cancellationToken);
     if (!userId.HasValue)
     {
-        await persistence.RestoreInvitationUseAsync(invitation.InvitationId);
+        if (invitation is not null) await persistence.RestoreInvitationUseAsync(invitation.InvitationId);
         return Results.BadRequest(new { error = "No se pudo crear la cuenta. Es posible que el correo ya exista." });
     }
-    await persistence.RegisterPendingAsync(userId.Value, invitation.OrganizationId, invitation.InvitedRole, email, name);
+    if (createOrganization)
+    {
+        await persistence.CreateOrganizationOwnerAsync(userId.Value, email, name, organizationName);
+        return Results.Ok(new { created = true, pendingApproval = false, message = "Organización creada. Confirmá tu correo y luego iniciá sesión como propietario." });
+    }
+    await persistence.RegisterPendingAsync(userId.Value, invitation!.OrganizationId, invitation.InvitedRole, email, name);
     return Results.Ok(new { created = true, pendingApproval = true, message = "Revisá tu correo y esperá la aprobación del propietario." });
 });
 
@@ -207,7 +219,7 @@ app.MapPost("/api/auth/update-password", async (UpdatePasswordRequest request, C
 app.MapGet("/auth/confirmed", () => Results.Content("""
     <!doctype html><html lang="es"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>ARES</title>
     <style>body{font:16px Segoe UI,Arial;background:#0f172a;color:white;display:grid;place-items:center;min-height:100vh}main{background:#172554;padding:36px;border-radius:18px;text-align:center}h1{color:#38bdf8}</style>
-    <main><h1>ARES</h1><h2>Correo confirmado</h2><p>Tu cuenta quedó pendiente de aprobación por el propietario.</p></main></html>
+    <main><h1>ARES</h1><h2>Correo confirmado</h2><p>Ya podés volver al Centro de Control e iniciar sesión. Si ingresaste con una invitación, tu acceso puede requerir aprobación.</p></main></html>
     """, "text/html; charset=utf-8"));
 
 app.MapGet("/auth/reset", () => Results.Content("""

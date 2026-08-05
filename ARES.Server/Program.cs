@@ -323,7 +323,18 @@ app.MapGet("/api/account/mfa", async (HttpContext context, CancellationToken can
 app.MapPost("/api/account/mfa/enroll", async (HttpContext context, CancellationToken cancellationToken) =>
 {
     JsonElement? result = await authService.EnrollMfaAsync(BearerToken(context), cancellationToken);
-    return result.HasValue ? Results.Json(result.Value) : Results.BadRequest(new { error = "No se pudo iniciar la configuración 2FA." });
+    if (!result.HasValue) return Results.BadRequest(new { error = "No se pudo iniciar la configuración 2FA." });
+    JsonElement value = result.Value;
+    string id = value.TryGetProperty("id", out JsonElement idValue) ? idValue.GetString() ?? "" : "";
+    JsonElement totp = value.GetProperty("totp");
+    string qr = totp.TryGetProperty("qr_code", out JsonElement qrValue) ? qrValue.GetString() ?? "" : "";
+    string image = qr.TrimStart().StartsWith("<svg", StringComparison.OrdinalIgnoreCase)
+        ? $"data:image/svg+xml;charset=utf-8,{Uri.EscapeDataString(qr)}" : qr;
+    return Results.Ok(new { id, totp = new {
+        qr_code = image,
+        secret = totp.TryGetProperty("secret", out JsonElement secret) ? secret.GetString() ?? "" : "",
+        uri = totp.TryGetProperty("uri", out JsonElement uri) ? uri.GetString() ?? "" : ""
+    }});
 });
 app.MapPost("/api/account/mfa/verify", async (MfaVerifyRequest request, HttpContext context, CancellationToken cancellationToken) =>
 {

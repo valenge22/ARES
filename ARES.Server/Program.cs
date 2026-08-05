@@ -212,18 +212,26 @@ app.MapPost("/api/auth/register", async (RegisterRequest request, HttpRequest ht
         if (invitation is null) return Results.Json(new { error = "Código de invitación inválido." }, statusCode: 403);
     }
     string origin = $"{httpRequest.Scheme}://{httpRequest.Host}";
-    Guid? userId = await authService.SignUpAsync(email, password, name, $"{origin}/auth/confirmed", cancellationToken);
-    if (!userId.HasValue)
+    SignUpResult signUp = await authService.SignUpAsync(email, password, name, $"{origin}/auth/confirmed", cancellationToken);
+    if (!signUp.UserId.HasValue)
     {
         if (invitation is not null) await persistence.RestoreInvitationUseAsync(invitation.InvitationId);
-        return Results.BadRequest(new { error = "No se pudo crear la cuenta. Es posible que el correo ya exista." });
+        string error = signUp.ErrorCode switch
+        {
+            "user_already_exists" or "email_exists" => "Ese correo todavía figura registrado en Supabase.",
+            "over_email_send_rate_limit" => "Supabase alcanzó temporalmente el límite de correos. Esperá unos minutos e intentá nuevamente.",
+            "signup_disabled" => "El registro de usuarios está deshabilitado en Supabase.",
+            "weak_password" => "Supabase rechazó la contraseña por considerarla demasiado débil.",
+            _ => $"Supabase rechazó el registro: {signUp.ErrorMessage}"
+        };
+        return Results.BadRequest(new { error, code = signUp.ErrorCode });
     }
     if (createOrganization)
     {
-        await persistence.CreateOrganizationOwnerAsync(userId.Value, email, name, organizationName);
+        await persistence.CreateOrganizationOwnerAsync(signUp.UserId.Value, email, name, organizationName);
         return Results.Ok(new { created = true, pendingApproval = false, message = "Organización creada. Confirmá tu correo y luego iniciá sesión como propietario." });
     }
-    await persistence.RegisterPendingAsync(userId.Value, invitation!.OrganizationId, invitation.InvitedRole, email, name);
+    await persistence.RegisterPendingAsync(signUp.UserId.Value, invitation!.OrganizationId, invitation.InvitedRole, email, name);
     return Results.Ok(new { created = true, pendingApproval = true, message = "Revisá tu correo y esperá la aprobación del propietario." });
 });
 

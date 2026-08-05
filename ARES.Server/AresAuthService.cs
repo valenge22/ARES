@@ -39,17 +39,32 @@ internal sealed class AresAuthService
         return new(admin.UserId, admin.OrganizationId, email, admin.DisplayName, admin.Role);
     }
 
-    public async Task<Guid?> SignUpAsync(string email, string password, string displayName, string redirectUrl, CancellationToken cancellationToken)
+    public async Task<SignUpResult> SignUpAsync(string email, string password, string displayName, string redirectUrl, CancellationToken cancellationToken)
     {
         if (!IsConfigured) throw new InvalidOperationException("Supabase Auth no esta configurado en Render.");
         using var request = CreateRequest(HttpMethod.Post, $"/auth/v1/signup?redirect_to={Uri.EscapeDataString(redirectUrl)}");
         request.Content = JsonContent.Create(new { email, password, data = new { display_name = displayName } });
         using HttpResponseMessage response = await http.SendAsync(request, cancellationToken);
-        if (!response.IsSuccessStatusCode) return null;
-        using JsonDocument document = JsonDocument.Parse(await response.Content.ReadAsStringAsync(cancellationToken));
+        string payload = await response.Content.ReadAsStringAsync(cancellationToken);
+        if (!response.IsSuccessStatusCode)
+        {
+            string code = ""; string message = "Supabase rechazó el registro.";
+            try
+            {
+                using JsonDocument error = JsonDocument.Parse(payload);
+                if (error.RootElement.TryGetProperty("code", out JsonElement codeElement)) code = codeElement.GetString() ?? "";
+                if (error.RootElement.TryGetProperty("msg", out JsonElement msg)) message = msg.GetString() ?? message;
+                else if (error.RootElement.TryGetProperty("message", out JsonElement detail)) message = detail.GetString() ?? message;
+                else if (error.RootElement.TryGetProperty("error_description", out JsonElement description)) message = description.GetString() ?? message;
+            }
+            catch { }
+            return new(null, code, message);
+        }
+        using JsonDocument document = JsonDocument.Parse(payload);
         JsonElement root = document.RootElement;
         JsonElement user = root.TryGetProperty("user", out JsonElement nested) ? nested : root;
-        return user.TryGetProperty("id", out JsonElement id) && Guid.TryParse(id.GetString(), out Guid value) ? value : null;
+        return user.TryGetProperty("id", out JsonElement id) && Guid.TryParse(id.GetString(), out Guid value)
+            ? new(value, "", "") : new(null, "invalid_signup_response", "Supabase no devolvió la identidad del usuario.");
     }
 
     public async Task<bool> RecoverAsync(string email, string redirectUrl, CancellationToken cancellationToken)
@@ -107,6 +122,7 @@ internal sealed class AresAuthService
 }
 
 internal sealed record AuthenticatedAdmin(Guid UserId, Guid OrganizationId, string Email, string DisplayName, string Role);
+internal sealed record SignUpResult(Guid? UserId, string ErrorCode, string ErrorMessage);
 internal sealed record AuthResult(string AccessToken, string RefreshToken, int ExpiresIn, AuthenticatedAdmin User);
 internal sealed record LoginRequest(string Email, string Password);
 internal sealed record RefreshRequest(string RefreshToken);

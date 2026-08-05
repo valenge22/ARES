@@ -131,6 +131,7 @@ internal sealed record RefreshRequest(string RefreshToken);
 internal sealed record RegisterRequest(string DisplayName, string Email, string Password, string InvitationCode, string OrganizationName);
 internal sealed record RecoverRequest(string Email);
 internal sealed record UpdatePasswordRequest(string AccessToken, string Password);
+internal sealed record ChangePasswordRequest(string Password);
 internal sealed record ApproveRegistrationRequest(string Role);
 internal sealed record UpdateAdminRequest(string Role, bool Enabled);
 internal sealed record CreateInvitationRequest(int MaxUses, int DurationHours, string Role = "Operator");

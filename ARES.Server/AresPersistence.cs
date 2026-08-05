@@ -168,6 +168,29 @@ internal sealed class AresPersistence
             alter table ares_devices add column if not exists rotation_requested boolean not null default false;
             alter table ares_devices add column if not exists previous_credential_hash bytea;
 
+            create table if not exists ares_auth_sessions (
+                session_id uuid primary key,
+                user_id uuid not null,
+                organization_id uuid not null,
+                access_hash bytea not null unique,
+                refresh_hash bytea not null unique,
+                client_name varchar(160) not null,
+                ip_address varchar(80) not null,
+                created_at timestamptz not null default now(),
+                last_seen_at timestamptz not null default now(),
+                revoked boolean not null default false
+            );
+            create table if not exists ares_login_events (
+                event_id bigserial primary key,
+                user_id uuid,
+                organization_id uuid,
+                email varchar(320) not null,
+                client_name varchar(160) not null,
+                ip_address varchar(80) not null,
+                successful boolean not null,
+                occurred_at timestamptz not null default now()
+            );
+
             alter table ares_state enable row level security;
             alter table ares_admin_users enable row level security;
             alter table ares_registration_requests enable row level security;
@@ -175,6 +198,8 @@ internal sealed class AresPersistence
             alter table ares_organizations enable row level security;
             alter table ares_device_enrollment_codes enable row level security;
             alter table ares_devices enable row level security;
+            alter table ares_auth_sessions enable row level security;
+            alter table ares_login_events enable row level security;
 
             revoke all on table ares_state from anon, authenticated;
             revoke all on table ares_admin_users from anon, authenticated;
@@ -183,6 +208,8 @@ internal sealed class AresPersistence
             revoke all on table ares_organizations from anon, authenticated;
             revoke all on table ares_device_enrollment_codes from anon, authenticated;
             revoke all on table ares_devices from anon, authenticated;
+            revoke all on table ares_auth_sessions from anon, authenticated;
+            revoke all on table ares_login_events from anon, authenticated;
             """;
         await command.ExecuteNonQueryAsync();
     }
@@ -345,6 +372,81 @@ internal sealed class AresPersistence
         command.CommandText = "update ares_invitation_codes set revoked=true where organization_id=@id"; await command.ExecuteNonQueryAsync();
         command.CommandText = "update ares_device_enrollment_codes set revoked=true where organization_id=@id"; await command.ExecuteNonQueryAsync();
         await transaction.CommitAsync();
+    }
+
+    public async Task RegisterAuthSessionAsync(Guid userId, Guid organizationId, byte[] accessHash, byte[] refreshHash, string client, string ip)
+    {
+        await using var connection = new NpgsqlConnection(connectionString); await connection.OpenAsync();
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            insert into ares_auth_sessions(session_id,user_id,organization_id,access_hash,refresh_hash,client_name,ip_address)
+            values(@id,@user,@organization,@access,@refresh,@client,@ip)
+            on conflict(access_hash) do update set last_seen_at=now(),client_name=excluded.client_name,ip_address=excluded.ip_address
+            """;
+        command.Parameters.AddWithValue("id", Guid.NewGuid()); command.Parameters.AddWithValue("user", userId);
+        command.Parameters.AddWithValue("organization", organizationId); command.Parameters.AddWithValue("access", accessHash);
+        command.Parameters.AddWithValue("refresh", refreshHash); command.Parameters.AddWithValue("client", client[..Math.Min(client.Length, 160)]);
+        command.Parameters.AddWithValue("ip", ip[..Math.Min(ip.Length, 80)]); await command.ExecuteNonQueryAsync();
+    }
+
+    public async Task<bool> IsAuthTokenRevokedAsync(byte[] hash, bool refresh)
+    {
+        await using var connection = new NpgsqlConnection(connectionString); await connection.OpenAsync();
+        await using var command = connection.CreateCommand();
+        command.CommandText = $"select revoked from ares_auth_sessions where {(refresh ? "refresh_hash" : "access_hash") }=@hash";
+        command.Parameters.AddWithValue("hash", hash); object? value = await command.ExecuteScalarAsync();
+        return value is bool revoked && revoked;
+    }
+
+    public async Task TouchAuthSessionAsync(byte[] accessHash)
+    {
+        await using var connection = new NpgsqlConnection(connectionString); await connection.OpenAsync();
+        await using var command = connection.CreateCommand(); command.CommandText = "update ares_auth_sessions set last_seen_at=now() where access_hash=@hash and not revoked";
+        command.Parameters.AddWithValue("hash", accessHash); await command.ExecuteNonQueryAsync();
+    }
+
+    public async Task<List<AuthSessionInfo>> GetAuthSessionsAsync(Guid userId)
+    {
+        var result = new List<AuthSessionInfo>(); await using var connection = new NpgsqlConnection(connectionString); await connection.OpenAsync();
+        await using var command = connection.CreateCommand(); command.CommandText = "select session_id,client_name,ip_address,created_at,last_seen_at,revoked from ares_auth_sessions where user_id=@user order by last_seen_at desc limit 50";
+        command.Parameters.AddWithValue("user", userId); await using var reader = await command.ExecuteReaderAsync();
+        while (await reader.ReadAsync()) result.Add(new(reader.GetGuid(0), reader.GetString(1), reader.GetString(2), reader.GetFieldValue<DateTimeOffset>(3), reader.GetFieldValue<DateTimeOffset>(4), reader.GetBoolean(5)));
+        return result;
+    }
+
+    public async Task<AdminUser?> GetAdminByEmailAsync(string email)
+    {
+        await using var connection = new NpgsqlConnection(connectionString); await connection.OpenAsync();
+        await using var command = connection.CreateCommand();
+        command.CommandText = "select user_id,organization_id,coalesce(email,''),display_name,role,enabled from ares_admin_users where lower(email)=lower(@email) limit 1";
+        command.Parameters.AddWithValue("email", email); await using var reader = await command.ExecuteReaderAsync();
+        return await reader.ReadAsync() ? new(reader.GetGuid(0), reader.GetGuid(1), reader.GetString(2), reader.GetString(3), reader.GetString(4), reader.GetBoolean(5)) : null;
+    }
+
+    public async Task RevokeAuthSessionAsync(Guid userId, Guid sessionId)
+    {
+        await using var connection = new NpgsqlConnection(connectionString); await connection.OpenAsync();
+        await using var command = connection.CreateCommand(); command.CommandText = "update ares_auth_sessions set revoked=true where session_id=@id and user_id=@user";
+        command.Parameters.AddWithValue("id", sessionId); command.Parameters.AddWithValue("user", userId); await command.ExecuteNonQueryAsync();
+    }
+
+    public async Task RecordLoginAsync(Guid? userId, Guid? organizationId, string email, string client, string ip, bool successful)
+    {
+        await using var connection = new NpgsqlConnection(connectionString); await connection.OpenAsync();
+        await using var command = connection.CreateCommand(); command.CommandText = "insert into ares_login_events(user_id,organization_id,email,client_name,ip_address,successful) values(@user,@organization,@email,@client,@ip,@ok)";
+        command.Parameters.Add(new NpgsqlParameter("user", NpgsqlTypes.NpgsqlDbType.Uuid) { Value = userId.HasValue ? userId.Value : DBNull.Value });
+        command.Parameters.Add(new NpgsqlParameter("organization", NpgsqlTypes.NpgsqlDbType.Uuid) { Value = organizationId.HasValue ? organizationId.Value : DBNull.Value });
+        command.Parameters.AddWithValue("email", email[..Math.Min(email.Length, 320)]); command.Parameters.AddWithValue("client", client[..Math.Min(client.Length, 160)]);
+        command.Parameters.AddWithValue("ip", ip[..Math.Min(ip.Length, 80)]); command.Parameters.AddWithValue("ok", successful); await command.ExecuteNonQueryAsync();
+    }
+
+    public async Task<List<LoginEventInfo>> GetLoginEventsAsync(Guid userId)
+    {
+        var result = new List<LoginEventInfo>(); await using var connection = new NpgsqlConnection(connectionString); await connection.OpenAsync();
+        await using var command = connection.CreateCommand(); command.CommandText = "select client_name,ip_address,successful,occurred_at from ares_login_events where user_id=@user order by occurred_at desc limit 100";
+        command.Parameters.AddWithValue("user", userId); await using var reader = await command.ExecuteReaderAsync();
+        while (await reader.ReadAsync()) result.Add(new(reader.GetString(0), reader.GetString(1), reader.GetBoolean(2), reader.GetFieldValue<DateTimeOffset>(3)));
+        return result;
     }
 
     private static LicenseInfo ReadLicense(NpgsqlDataReader reader) => new(reader.GetGuid(0), reader.GetString(1), reader.GetString(2),
@@ -721,5 +823,7 @@ internal sealed record DeviceEnrollmentGrant(Guid EnrollmentId, Guid Organizatio
 internal sealed record DeviceIdentity(Guid OrganizationId, string DeviceId, string AssignedGroup);
 internal sealed record LicenseInfo(Guid OrganizationId, string OrganizationName, string Slug, string Plan, string Status,
     DateTimeOffset TrialEndsAt, DateTimeOffset? ExpiresAt, int GraceDays, int MaxDevices, long UsedDevices);
+internal sealed record AuthSessionInfo(Guid SessionId, string ClientName, string IpAddress, DateTimeOffset CreatedAt, DateTimeOffset LastSeenAt, bool Revoked);
+internal sealed record LoginEventInfo(string ClientName, string IpAddress, bool Successful, DateTimeOffset OccurredAt);
 internal sealed record RegistrationRequestInfo(Guid UserId, string Email, string DisplayName, string Status, DateTimeOffset RequestedAt, DateTimeOffset? ReviewedAt);
 internal sealed record InvitationInfo(Guid InvitationId, string CodePrefix, int MaxUses, int UsedCount, DateTimeOffset ExpiresAt, bool Revoked, DateTimeOffset CreatedAt);

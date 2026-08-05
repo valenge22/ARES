@@ -109,8 +109,12 @@ app.Use(async (context, next) =>
     }
     AuthenticatedAdmin? admin = null;
     string authorization = context.Request.Headers.Authorization.ToString();
-    if (authorization.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
-        admin = await authService.ValidateAsync(authorization[7..].Trim(), context.RequestAborted);
+    string accessToken = authorization.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase) ? authorization[7..].Trim() : "";
+    if (!string.IsNullOrWhiteSpace(accessToken) && !await persistence.IsAuthTokenRevokedAsync(HashToken(accessToken), false))
+    {
+        admin = await authService.ValidateAsync(accessToken, context.RequestAborted);
+        if (admin is not null) await persistence.TouchAuthSessionAsync(HashToken(accessToken));
+    }
     if (!publicPath && !validApiKey && deviceIdentity is null && admin is null)
     {
         context.Response.StatusCode = StatusCodes.Status401Unauthorized;
@@ -166,18 +170,27 @@ app.MapGet("/", () => Results.Redirect("/portal"));
 app.MapGet("/portal", () => Results.File(Path.Combine(app.Environment.ContentRootPath, "wwwroot", "portal.html"), "text/html; charset=utf-8"));
 app.MapGet("/admin-ares", () => Results.File(Path.Combine(app.Environment.ContentRootPath, "wwwroot", "admin-ares.html"), "text/html; charset=utf-8"));
 
-app.MapPost("/api/auth/login", async (LoginRequest request, CancellationToken cancellationToken) =>
+app.MapPost("/api/auth/login", async (LoginRequest request, HttpContext context, CancellationToken cancellationToken) =>
 {
     if (string.IsNullOrWhiteSpace(request.Email) || string.IsNullOrEmpty(request.Password))
         return Results.BadRequest(new { error = "Ingresá correo y contraseña." });
     AuthResult? result = await authService.LoginAsync(request.Email.Trim(), request.Password, cancellationToken);
-    return result is null ? Results.Json(new { error = "Correo, contraseña o permisos inválidos." }, statusCode: 401) : Results.Ok(result);
+    string client = ClientName(context); string ip = ClientIp(context);
+    AdminUser? knownUser = result is null ? await persistence.GetAdminByEmailAsync(request.Email.Trim()) : null;
+    await persistence.RecordLoginAsync(result?.User.UserId ?? knownUser?.UserId, result?.User.OrganizationId ?? knownUser?.OrganizationId, request.Email.Trim(), client, ip, result is not null);
+    if (result is null) return Results.Json(new { error = "Correo, contraseña o permisos inválidos." }, statusCode: 401);
+    await persistence.RegisterAuthSessionAsync(result.User.UserId, result.User.OrganizationId, HashToken(result.AccessToken), HashToken(result.RefreshToken), client, ip);
+    return Results.Ok(result);
 });
 
-app.MapPost("/api/auth/refresh", async (RefreshRequest request, CancellationToken cancellationToken) =>
+app.MapPost("/api/auth/refresh", async (RefreshRequest request, HttpContext context, CancellationToken cancellationToken) =>
 {
+    if (await persistence.IsAuthTokenRevokedAsync(HashToken(request.RefreshToken), true))
+        return Results.Json(new { error = "Esta sesión fue cerrada remotamente." }, statusCode: 401);
     AuthResult? result = await authService.RefreshAsync(request.RefreshToken, cancellationToken);
-    return result is null ? Results.Json(new { error = "La sesión venció. Iniciá sesión nuevamente." }, statusCode: 401) : Results.Ok(result);
+    if (result is null) return Results.Json(new { error = "La sesión venció. Iniciá sesión nuevamente." }, statusCode: 401);
+    await persistence.RegisterAuthSessionAsync(result.User.UserId, result.User.OrganizationId, HashToken(result.AccessToken), HashToken(result.RefreshToken), ClientName(context), ClientIp(context));
+    return Results.Ok(result);
 });
 
 app.MapGet("/api/auth/me", (HttpContext context) => Results.Ok((AuthenticatedAdmin)context.Items["AresAdmin"]!));
@@ -280,6 +293,19 @@ app.MapPost("/api/auth/update-password", async (UpdatePasswordRequest request, C
     if (request.Password.Length < 8) return Results.BadRequest(new { error = "La contraseña debe tener al menos 8 caracteres." });
     return await authService.UpdatePasswordAsync(request.AccessToken, request.Password, cancellationToken) ? Results.Ok(new { updated = true }) : Results.BadRequest(new { error = "El enlace venció o no es válido." });
 });
+app.MapPut("/api/account/password", async (ChangePasswordRequest request, HttpContext context, CancellationToken cancellationToken) =>
+{
+    if (request.Password.Length < 8) return Results.BadRequest(new { error = "La contraseña debe tener al menos 8 caracteres." });
+    string token = context.Request.Headers.Authorization.ToString().Replace("Bearer ", "", StringComparison.OrdinalIgnoreCase).Trim();
+    return await authService.UpdatePasswordAsync(token, request.Password, cancellationToken)
+        ? Results.Ok(new { updated = true }) : Results.BadRequest(new { error = "No se pudo actualizar la contraseña." });
+});
+app.MapGet("/api/account/sessions", async (HttpContext context) => Results.Ok(await persistence.GetAuthSessionsAsync(CurrentAdmin(context).UserId)));
+app.MapDelete("/api/account/sessions/{id:guid}", async (Guid id, HttpContext context) =>
+{
+    await persistence.RevokeAuthSessionAsync(CurrentAdmin(context).UserId, id); return Results.Ok(new { revoked = true });
+});
+app.MapGet("/api/account/login-events", async (HttpContext context) => Results.Ok(await persistence.GetLoginEventsAsync(CurrentAdmin(context).UserId)));
 
 app.MapGet("/auth/confirmed", () => Results.Content("""
     <!doctype html><html lang="es"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>ARES</title>
@@ -1013,6 +1039,11 @@ bool IsPlatformAdmin(HttpContext context) => context.Items["AresAdmin"] is Authe
 bool ValidRole(string role) => role is "Owner" or "Administrator" or "Operator" or "Viewer";
 byte[] HashInvitationCode(string? code) => SHA256.HashData(Encoding.UTF8.GetBytes((code ?? "").Trim().ToUpperInvariant()));
 byte[] HashSecret(string? value) => SHA256.HashData(Encoding.UTF8.GetBytes((value ?? "").Trim().ToUpperInvariant()));
+byte[] HashToken(string? value) => SHA256.HashData(Encoding.UTF8.GetBytes(value ?? ""));
+string ClientIp(HttpContext context) => context.Request.Headers["X-Forwarded-For"].FirstOrDefault()?.Split(',')[0].Trim()
+    ?? context.Connection.RemoteIpAddress?.ToString() ?? "Desconocida";
+string ClientName(HttpContext context) => string.IsNullOrWhiteSpace(context.Request.Headers.UserAgent)
+    ? "ARES Centro de Control" : context.Request.Headers.UserAgent.ToString();
 bool CanAccess(string role, string method, PathString path)
 {
     if (role is "Owner" or "Administrator") return true;

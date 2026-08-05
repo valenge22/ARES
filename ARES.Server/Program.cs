@@ -33,8 +33,8 @@ string updateVersionPath = Path.Combine(AppContext.BaseDirectory, "data", "agent
 string controlSessionsPath = Path.Combine(AppContext.BaseDirectory, "data", "control-sessions.json");
 string controlWindowsPackagePath = Path.Combine(AppContext.BaseDirectory, "data", "control-windows-update.zip");
 string controlMacPackagePath = Path.Combine(AppContext.BaseDirectory, "data", "control-macos-update.pkg");
-string latestWindowsControlVersion = "1.5.1";
-string latestMacControlVersion = "1.4.0";
+string latestWindowsControlVersion = "1.6.0";
+string latestMacControlVersion = "1.5.0";
 Directory.CreateDirectory(Path.GetDirectoryName(dataPath)!);
 
 var agents = new ConcurrentDictionary<string, AgentStatus>(StringComparer.OrdinalIgnoreCase);
@@ -65,9 +65,9 @@ foreach (Guid organizationId in await persistence.GetOrganizationIdsAsync())
     if (policies.Count == 0) policies.Add(new GroupPolicy { Grupo = "General" });
     policiesByOrganization[organizationId] = policies;
 }
-string latestAgentVersion = builder.Configuration["ARES_LATEST_AGENT_VERSION"] ?? "1.6.6";
+string latestAgentVersion = builder.Configuration["ARES_LATEST_AGENT_VERSION"] ?? "1.7.0";
 string agentUpdateUrl = builder.Configuration["ARES_AGENT_UPDATE_URL"]
-    ?? "https://github.com/valenge22/ARES/releases/download/v1.6.1/ARES-Agent-Windows-x64.zip";
+    ?? "https://github.com/valenge22/ARES/releases/download/v1.7.0/ARES-Agent-Remoto-Windows-x64.zip";
 if (File.Exists(updateVersionPath)) latestAgentVersion = File.ReadAllText(updateVersionPath).Trim();
 foreach (AgentStatus agent in await LoadStateAsync("agents", dataPath, new List<AgentStatus>()))
 {

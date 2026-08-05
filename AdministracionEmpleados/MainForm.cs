@@ -445,9 +445,9 @@ namespace AdministracionEmpleados
         private static string? PedirVersionAgent()
         {
             using var form = new Form { Text = "Publicar ARES Agent", Width = 410, Height = 175, StartPosition = FormStartPosition.CenterParent, FormBorderStyle = FormBorderStyle.FixedDialog, MaximizeBox = false, MinimizeBox = false };
-            var version = new TextBox { Text = "1.6.6", Left = 22, Top = 45, Width = 350 };
+            var version = new TextBox { Text = "1.7.0", Left = 22, Top = 45, Width = 350 };
             var publish = new Button { Text = "Publicar", Left = 272, Top = 84, Width = 100, DialogResult = DialogResult.OK };
-            form.Controls.AddRange([new Label { Text = "Versión incluida en el ZIP (ejemplo: 1.6.6)", Left = 22, Top = 20, AutoSize = true }, version, publish]);
+            form.Controls.AddRange([new Label { Text = "Versión incluida en el ZIP (ejemplo: 1.7.0)", Left = 22, Top = 20, AutoSize = true }, version, publish]);
             form.AcceptButton = publish;
             if (form.ShowDialog() != DialogResult.OK) return null;
             return Version.TryParse(version.Text.Trim(), out Version? parsed) ? parsed.ToString(3) : null;

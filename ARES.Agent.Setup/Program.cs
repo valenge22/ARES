@@ -30,6 +30,7 @@ internal sealed class SetupForm : Form
     private readonly TextBox employee = Field();
     private readonly TextBox employeePassword = Field(true);
     private readonly TextBox employeeConfirmation = Field(true);
+    private readonly CheckBox useExisting = new() { Text = "Usar una cuenta estándar que ya existe (no crear otra)", AutoSize = true, ForeColor = Color.FromArgb(30, 64, 175) };
     private readonly TextBox adminPassword = Field(true);
     private readonly TextBox adminConfirmation = Field(true);
     private readonly Label status = new() { AutoSize = true, ForeColor = Color.FromArgb(71, 85, 105) };
@@ -67,15 +68,18 @@ internal sealed class SetupForm : Form
 
         AddFull(body, 0, "Cuenta administradora detectada", new TextBox { Text = Environment.UserName, ReadOnly = true, Dock = DockStyle.Top, BackColor = Color.FromArgb(226, 232, 240) });
         AddFull(body, 1, "Clave compartida de ARES", apiKey);
-        AddFull(body, 2, "Nombre de la nueva cuenta del empleado", employee);
+        AddFull(body, 2, "Nombre de la cuenta del empleado", employee);
         AddPair(body, 3, "Contraseña inicial del empleado", employeePassword, "Confirmar contraseña", employeeConfirmation);
         AddPair(body, 4, "Nueva contraseña privada del administrador", adminPassword, "Confirmar contraseña", adminConfirmation);
 
+        var accountOptions = new Panel { Dock = DockStyle.Fill };
+        useExisting.Location = new Point(0, 2);
         var explanation = new Label {
             Text = "La cuenta actual conservará sus permisos administrativos. La nueva cuenta del empleado será estándar y será la única administrada por ARES.",
-            Dock = DockStyle.Fill, AutoSize = false, ForeColor = Color.FromArgb(71, 85, 105), Padding = new Padding(0, 8, 0, 0)
+            AutoSize = false, ForeColor = Color.FromArgb(71, 85, 105), Location = new Point(0, 27), Size = new Size(535, 38)
         };
-        body.Controls.Add(explanation, 0, 5); body.SetColumnSpan(explanation, 2);
+        accountOptions.Controls.Add(useExisting); accountOptions.Controls.Add(explanation);
+        body.Controls.Add(accountOptions, 0, 5); body.SetColumnSpan(accountOptions, 2);
         body.Controls.Add(status, 0, 6); body.SetColumnSpan(status, 2);
 
         var actions = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.RightToLeft, WrapContents = false };
@@ -85,6 +89,14 @@ internal sealed class SetupForm : Form
 
         Controls.Add(body); Controls.Add(progress); Controls.Add(header);
         install.Click += async (_, _) => await InstallAsync();
+        useExisting.CheckedChanged += (_, _) =>
+        {
+            employeePassword.Enabled = employeeConfirmation.Enabled = !useExisting.Checked;
+            if (useExisting.Checked) { employeePassword.Clear(); employeeConfirmation.Clear(); }
+            explanation.Text = useExisting.Checked
+                ? "ARES conservará la contraseña y el perfil de esa cuenta. La instalación se cancelará si el usuario no existe o tiene permisos administrativos."
+                : "La cuenta actual conservará sus permisos administrativos. ARES creará una cuenta estándar nueva para el empleado.";
+        };
         FormClosing += (_, e) => { if (busy && !Installed) e.Cancel = true; };
     }
 
@@ -111,7 +123,8 @@ internal sealed class SetupForm : Form
             start.ArgumentList.Add("-InstallerAdminUser"); start.ArgumentList.Add(Environment.UserName);
             start.ArgumentList.Add("-ProvisionStandardUser"); start.ArgumentList.Add("-NonInteractiveProvisioning");
             start.ArgumentList.Add("-LogPath"); start.ArgumentList.Add(Path.Combine(Path.GetTempPath(), "ARES-Agent-Install.log"));
-            start.Environment["ARES_SETUP_EMPLOYEE_PASSWORD"] = employeePassword.Text;
+            if (!useExisting.Checked)
+                start.Environment["ARES_SETUP_EMPLOYEE_PASSWORD"] = employeePassword.Text;
             start.Environment["ARES_SETUP_ADMIN_PASSWORD"] = adminPassword.Text;
             start.Environment["ARES_SETUP_API_KEY"] = apiKey.Text.Trim();
 
@@ -142,11 +155,11 @@ internal sealed class SetupForm : Form
         string name = employee.Text.Trim();
         if (name.Length is < 1 or > 20 || name.IndexOfAny("\\/[]:;|=,+*?<>@\"".ToCharArray()) >= 0 || name.EndsWith('.')) return "El nombre del empleado no es válido o supera 20 caracteres.";
         if (name.Equals(Environment.UserName, StringComparison.OrdinalIgnoreCase)) return "La cuenta del empleado debe ser diferente de la administradora.";
-        if (employeePassword.Text.Length < 8) return "La contraseña del empleado debe tener al menos 8 caracteres.";
-        if (employeePassword.Text != employeeConfirmation.Text) return "Las contraseñas del empleado no coinciden.";
+        if (!useExisting.Checked && employeePassword.Text.Length < 8) return "La contraseña del empleado debe tener al menos 8 caracteres.";
+        if (!useExisting.Checked && employeePassword.Text != employeeConfirmation.Text) return "Las contraseñas del empleado no coinciden.";
         if (adminPassword.Text.Length < 10) return "La contraseña administrativa debe tener al menos 10 caracteres.";
         if (adminPassword.Text != adminConfirmation.Text) return "Las contraseñas administrativas no coinciden.";
-        if (adminPassword.Text == employeePassword.Text) return "La contraseña administrativa debe ser diferente de la del empleado.";
+        if (!useExisting.Checked && adminPassword.Text == employeePassword.Text) return "La contraseña administrativa debe ser diferente de la del empleado.";
         return null;
     }
 

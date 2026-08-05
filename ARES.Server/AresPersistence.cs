@@ -268,6 +268,15 @@ internal sealed class AresPersistence
         command.Parameters.AddWithValue("id", organizationId); await command.ExecuteNonQueryAsync();
     }
 
+    public async Task UpdateOrganizationNameAsync(Guid organizationId, string name)
+    {
+        await using var connection = new NpgsqlConnection(connectionString); await connection.OpenAsync();
+        await using var command = connection.CreateCommand();
+        command.CommandText = "update ares_organizations set name=@name,updated_at=now() where organization_id=@id and enabled=true";
+        command.Parameters.AddWithValue("id", organizationId); command.Parameters.AddWithValue("name", name);
+        await command.ExecuteNonQueryAsync();
+    }
+
     public async Task<List<Guid>> GetOrganizationIdsAsync()
     {
         if (!UsesDatabase) return [DefaultOrganizationId];

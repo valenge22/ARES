@@ -89,6 +89,7 @@ app.Use(async (context, next) =>
 {
     bool publicPath = context.Request.Path.Equals("/") ||
         context.Request.Path.Equals("/portal") ||
+        context.Request.Path.Equals("/admin-ares") ||
         context.Request.Path.StartsWithSegments("/health") ||
         context.Request.Path.StartsWithSegments("/solicitar") ||
         context.Request.Path.StartsWithSegments("/auth") ||
@@ -163,6 +164,7 @@ app.MapGet("/health", () => Results.Ok(new
 
 app.MapGet("/", () => Results.Redirect("/portal"));
 app.MapGet("/portal", () => Results.File(Path.Combine(app.Environment.ContentRootPath, "wwwroot", "portal.html"), "text/html; charset=utf-8"));
+app.MapGet("/admin-ares", () => Results.File(Path.Combine(app.Environment.ContentRootPath, "wwwroot", "admin-ares.html"), "text/html; charset=utf-8"));
 
 app.MapPost("/api/auth/login", async (LoginRequest request, CancellationToken cancellationToken) =>
 {

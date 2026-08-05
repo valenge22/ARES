@@ -205,10 +205,11 @@ public sealed class MainWindow : Window
             createInvitation.Click += async (_, _) =>
             {
                 var uses = new NumericUpDown { Minimum = 1, Maximum = 1000, Value = 1 }; var hours = new NumericUpDown { Minimum = 1, Maximum = 720, Value = 48 };
+                var role = new ComboBox { ItemsSource = new[] { "Administrator", "Supervisor", "Viewer" }, SelectedItem = "Viewer" };
                 var create = new Button { Content = "Generar código" }; var message = new TextBlock { TextWrapping = TextWrapping.Wrap };
-                var form = new Window { Title = "Nueva invitación", Width = 430, Height = 330, WindowStartupLocation = WindowStartupLocation.CenterOwner,
-                    Content = new StackPanel { Margin = new Thickness(26), Spacing = 10, Children = { new TextBlock { Text = "Cantidad máxima de usos" }, uses, new TextBlock { Text = "Duración en horas" }, hours, create, message } } };
-                create.Click += async (_, _) => { CreatedInvitation result = await api.CreateInvitationAsync((int)(uses.Value ?? 1), (int)(hours.Value ?? 48)); if (TopLevel.GetTopLevel(this)?.Clipboard is { } clipboard) await clipboard.SetTextAsync(result.Code); message.Text = $"{result.Code}\nCopiado al portapapeles. Se mostrará completo solamente esta vez."; await LoadAsync(); };
+                var form = new Window { Title = "Nueva invitación", Width = 430, Height = 400, WindowStartupLocation = WindowStartupLocation.CenterOwner,
+                    Content = new StackPanel { Margin = new Thickness(26), Spacing = 10, Children = { new TextBlock { Text = "Rol del invitado" }, role, new TextBlock { Text = "Cantidad máxima de usos" }, uses, new TextBlock { Text = "Duración en horas" }, hours, create, message } } };
+                create.Click += async (_, _) => { CreatedInvitation result = await api.CreateInvitationAsync((int)(uses.Value ?? 1), (int)(hours.Value ?? 48), role.SelectedItem?.ToString() ?? "Viewer"); if (TopLevel.GetTopLevel(this)?.Clipboard is { } clipboard) await clipboard.SetTextAsync(result.Code); message.Text = $"{result.Code}\nCopiado al portapapeles. Se mostrará completo solamente esta vez."; await LoadAsync(); };
                 await form.ShowDialog(dialog);
             };
             list.Children.Add(createInvitation);

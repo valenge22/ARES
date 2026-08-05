@@ -230,9 +230,9 @@ public sealed class AgenteDiscoveryService
     {
         using HttpClient client = CrearCliente(); return await client.GetFromJsonAsync<List<InvitationInfo>>($"{AresSettings.Cargar().ServerUrl.TrimEnd('/')}/api/admin/invitations", cancelacion) ?? [];
     }
-    public async Task<CreatedInvitation> CrearInvitacionAsync(int maxUses, int durationHours, CancellationToken cancelacion = default)
+    public async Task<CreatedInvitation> CrearInvitacionAsync(int maxUses, int durationHours, string role, CancellationToken cancelacion = default)
     {
-        using HttpClient client = CrearCliente(); using HttpResponseMessage response = await client.PostAsJsonAsync($"{AresSettings.Cargar().ServerUrl.TrimEnd('/')}/api/admin/invitations", new { maxUses, durationHours }, cancelacion); response.EnsureSuccessStatusCode();
+        using HttpClient client = CrearCliente(); using HttpResponseMessage response = await client.PostAsJsonAsync($"{AresSettings.Cargar().ServerUrl.TrimEnd('/')}/api/admin/invitations", new { maxUses, durationHours, role }, cancelacion); response.EnsureSuccessStatusCode();
         return await response.Content.ReadFromJsonAsync<CreatedInvitation>(cancelacion) ?? throw new InvalidDataException("Respuesta de invitación inválida.");
     }
     public async Task RevocarInvitacionAsync(Guid id, CancellationToken cancelacion = default)

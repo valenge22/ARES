@@ -44,20 +44,43 @@ var requestLimits = new ConcurrentDictionary<string, DateTimeOffset>(StringCompa
 var controlSessions = new ConcurrentDictionary<string, ControlSessionStatus>(StringComparer.OrdinalIgnoreCase);
 List<ControlSessionStatus> savedControlSessions = await LoadStateAsync("control-sessions", controlSessionsPath, new List<ControlSessionStatus>());
 foreach (ControlSessionStatus session in savedControlSessions)
-        controlSessions[session.Id] = session;
-ScheduleState schedule = await LoadStateAsync("schedule", schedulePath, new ScheduleState());
-var scheduleHistory = await LoadStateAsync("schedule-history", historyPath, new List<ScheduleRevision>());
-var groupPolicies = await LoadStateAsync("group-policies", policiesPath, new List<GroupPolicy>());
+{
+    if (session.OrganizationId == Guid.Empty) session.OrganizationId = AresPersistence.DefaultOrganizationId;
+    controlSessions[OrganizationKey(session.OrganizationId, session.Id)] = session;
+}
+var schedules = new ConcurrentDictionary<Guid, ScheduleState>();
+var scheduleHistories = new ConcurrentDictionary<Guid, List<ScheduleRevision>>();
+var policiesByOrganization = new ConcurrentDictionary<Guid, List<GroupPolicy>>();
+schedules[AresPersistence.DefaultOrganizationId] = await LoadStateAsync("schedule", schedulePath, new ScheduleState());
+scheduleHistories[AresPersistence.DefaultOrganizationId] = await LoadStateAsync("schedule-history", historyPath, new List<ScheduleRevision>());
+var defaultPolicies = await LoadStateAsync("group-policies", policiesPath, new List<GroupPolicy>());
 foreach (string group in new[] { "Grupo 1", "Grupo 2", "Grupo 3" })
-    if (!groupPolicies.Any(p => p.Grupo == group)) groupPolicies.Add(new GroupPolicy { Grupo = group });
+    if (!defaultPolicies.Any(p => p.Grupo == group)) defaultPolicies.Add(new GroupPolicy { Grupo = group });
+policiesByOrganization[AresPersistence.DefaultOrganizationId] = defaultPolicies;
+foreach (Guid organizationId in await persistence.GetOrganizationIdsAsync())
+{
+    if (organizationId == AresPersistence.DefaultOrganizationId) continue;
+    schedules[organizationId] = await persistence.LoadAsync<ScheduleState>($"org:{organizationId:N}:schedule") ?? new();
+    scheduleHistories[organizationId] = await persistence.LoadAsync<List<ScheduleRevision>>($"org:{organizationId:N}:schedule-history") ?? [];
+    List<GroupPolicy> policies = await persistence.LoadAsync<List<GroupPolicy>>($"org:{organizationId:N}:group-policies") ?? [];
+    foreach (string group in new[] { "Grupo 1", "Grupo 2", "Grupo 3" })
+        if (!policies.Any(p => p.Grupo == group)) policies.Add(new GroupPolicy { Grupo = group });
+    policiesByOrganization[organizationId] = policies;
+}
 string latestAgentVersion = builder.Configuration["ARES_LATEST_AGENT_VERSION"] ?? "1.6.6";
 string agentUpdateUrl = builder.Configuration["ARES_AGENT_UPDATE_URL"]
     ?? "https://github.com/valenge22/ARES/releases/download/v1.6.1/ARES-Agent-Windows-x64.zip";
 if (File.Exists(updateVersionPath)) latestAgentVersion = File.ReadAllText(updateVersionPath).Trim();
 foreach (AgentStatus agent in await LoadStateAsync("agents", dataPath, new List<AgentStatus>()))
-    agents[agent.Id] = agent;
+{
+    if (agent.OrganizationId == Guid.Empty) agent.OrganizationId = AresPersistence.DefaultOrganizationId;
+    agents[OrganizationKey(agent.OrganizationId, agent.Id)] = agent;
+}
 foreach (AgentAuditEvent evento in await LoadStateAsync("audit", auditPath, new List<AgentAuditEvent>()))
+{
+    if (evento.OrganizationId == Guid.Empty) evento.OrganizationId = AresPersistence.DefaultOrganizationId;
     audit.Enqueue(evento);
+}
 
 app.Use(async (context, next) =>
 {
@@ -86,7 +109,13 @@ app.Use(async (context, next) =>
         await context.Response.WriteAsJsonAsync(new { error = "Tu rol no tiene permiso para realizar esta acción." });
         return;
     }
-    if (admin is not null) context.Items["AresAdmin"] = admin;
+    if (admin is not null)
+    {
+        context.Items["AresAdmin"] = admin;
+        context.Items["AresOrganizationId"] = admin.OrganizationId;
+    }
+    else if (validApiKey)
+        context.Items["AresOrganizationId"] = AresPersistence.DefaultOrganizationId;
     await next();
 });
 
@@ -119,17 +148,17 @@ app.MapPost("/api/auth/register", async (RegisterRequest request, HttpRequest ht
     string name = request.DisplayName?.Trim() ?? ""; string email = request.Email?.Trim() ?? ""; string password = request.Password ?? "";
     if (name.Length is < 2 or > 80 || !email.Contains('@') || password.Length < 8)
         return Results.BadRequest(new { error = "Revisá el nombre, correo y contraseña (mínimo 8 caracteres)." });
-    Guid? invitationId = await persistence.ConsumeInvitationAsync(HashInvitationCode(request.InvitationCode));
-    if (!invitationId.HasValue)
+    InvitationGrant? invitation = await persistence.ConsumeInvitationAsync(HashInvitationCode(request.InvitationCode));
+    if (invitation is null)
         return Results.Json(new { error = "Código de invitación inválido." }, statusCode: 403);
     string origin = $"{httpRequest.Scheme}://{httpRequest.Host}";
     Guid? userId = await authService.SignUpAsync(email, password, name, $"{origin}/auth/confirmed", cancellationToken);
     if (!userId.HasValue)
     {
-        await persistence.RestoreInvitationUseAsync(invitationId.Value);
+        await persistence.RestoreInvitationUseAsync(invitation.InvitationId);
         return Results.BadRequest(new { error = "No se pudo crear la cuenta. Es posible que el correo ya exista." });
     }
-    await persistence.RegisterPendingAsync(userId.Value, email, name);
+    await persistence.RegisterPendingAsync(userId.Value, invitation.OrganizationId, invitation.InvitedRole, email, name);
     return Results.Ok(new { created = true, pendingApproval = true, message = "Revisá tu correo y esperá la aprobación del propietario." });
 });
 
@@ -160,54 +189,59 @@ app.MapGet("/auth/reset", () => Results.Content("""
     """, "text/html; charset=utf-8"));
 
 app.MapGet("/api/admin/registrations", async (HttpContext context) =>
-    IsOwner(context) ? Results.Ok(await persistence.GetRegistrationsAsync()) : Results.Forbid());
+    IsOwner(context) ? Results.Ok(await persistence.GetRegistrationsAsync(CurrentAdmin(context).OrganizationId)) : Results.Forbid());
 app.MapGet("/api/admin/users", async (HttpContext context) =>
-    IsOwner(context) ? Results.Ok(await persistence.GetAdminsAsync()) : Results.Forbid());
+    IsOwner(context) ? Results.Ok(await persistence.GetAdminsAsync(CurrentAdmin(context).OrganizationId)) : Results.Forbid());
 app.MapPost("/api/admin/registrations/{id:guid}/approve", async (Guid id, ApproveRegistrationRequest request, HttpContext context) =>
 {
     if (!IsOwner(context)) return Results.Forbid();
     if (!ValidRole(request.Role) || request.Role == "Owner") return Results.BadRequest(new { error = "Rol inválido." });
-    return await persistence.ApproveAsync(id, request.Role, CurrentAdmin(context).UserId) ? Results.Ok(new { approved = true }) : Results.NotFound();
+    AuthenticatedAdmin admin = CurrentAdmin(context);
+    return await persistence.ApproveAsync(id, admin.OrganizationId, request.Role, admin.UserId) ? Results.Ok(new { approved = true }) : Results.NotFound();
 });
 app.MapPost("/api/admin/registrations/{id:guid}/reject", async (Guid id, HttpContext context) =>
 {
-    if (!IsOwner(context)) return Results.Forbid(); await persistence.ReviewRegistrationAsync(id, "Rejected", CurrentAdmin(context).UserId); return Results.Ok(new { rejected = true });
+    if (!IsOwner(context)) return Results.Forbid(); AuthenticatedAdmin admin = CurrentAdmin(context); await persistence.ReviewRegistrationAsync(id, admin.OrganizationId, "Rejected", admin.UserId); return Results.Ok(new { rejected = true });
 });
 app.MapPut("/api/admin/users/{id:guid}", async (Guid id, UpdateAdminRequest request, HttpContext context) =>
 {
     if (!IsOwner(context)) return Results.Forbid();
     if (!ValidRole(request.Role) || request.Role == "Owner") return Results.BadRequest(new { error = "Rol inválido." });
-    return await persistence.UpdateAdminAsync(id, request.Role, request.Enabled) ? Results.Ok(new { updated = true }) : Results.NotFound();
+    return await persistence.UpdateAdminAsync(id, CurrentAdmin(context).OrganizationId, request.Role, request.Enabled) ? Results.Ok(new { updated = true }) : Results.NotFound();
 });
 app.MapDelete("/api/admin/users/{id:guid}", async (Guid id, HttpContext context) =>
 {
     if (!IsOwner(context)) return Results.Forbid();
-    return await persistence.RemoveAdminAsync(id) ? Results.Ok(new { removed = true }) : Results.NotFound();
+    return await persistence.RemoveAdminAsync(id, CurrentAdmin(context).OrganizationId) ? Results.Ok(new { removed = true }) : Results.NotFound();
 });
 app.MapGet("/api/admin/invitations", async (HttpContext context) =>
-    IsOwner(context) ? Results.Ok(await persistence.GetInvitationsAsync()) : Results.Forbid());
+    IsOwner(context) ? Results.Ok(await persistence.GetInvitationsAsync(CurrentAdmin(context).OrganizationId)) : Results.Forbid());
 app.MapPost("/api/admin/invitations", async (CreateInvitationRequest request, HttpContext context) =>
 {
     if (!IsOwner(context)) return Results.Forbid();
     if (request.MaxUses is < 1 or > 1000 || request.DurationHours is < 1 or > 720)
         return Results.BadRequest(new { error = "Los usos deben ser 1-1000 y la duración 1-720 horas." });
+    if (!ValidRole(request.Role) || request.Role == "Owner") return Results.BadRequest(new { error = "Rol inválido." });
     string raw = RandomNumberGenerator.GetHexString(12);
     string code = $"ARES-{raw[..4]}-{raw[4..8]}-{raw[8..]}";
-    InvitationInfo info = await persistence.CreateInvitationAsync(HashInvitationCode(code), code[..9], request.MaxUses,
-        DateTimeOffset.UtcNow.AddHours(request.DurationHours), CurrentAdmin(context).UserId);
+    AuthenticatedAdmin admin = CurrentAdmin(context);
+    InvitationInfo info = await persistence.CreateInvitationAsync(admin.OrganizationId, request.Role, HashInvitationCode(code), code[..9], request.MaxUses,
+        DateTimeOffset.UtcNow.AddHours(request.DurationHours), admin.UserId);
     return Results.Ok(new { code, invitation = info });
 });
 app.MapDelete("/api/admin/invitations/{id:guid}", async (Guid id, HttpContext context) =>
 {
-    if (!IsOwner(context)) return Results.Forbid(); await persistence.RevokeInvitationAsync(id); return Results.Ok(new { revoked = true });
+    if (!IsOwner(context)) return Results.Forbid(); await persistence.RevokeInvitationAsync(id, CurrentAdmin(context).OrganizationId); return Results.Ok(new { revoked = true });
 });
 
-app.MapPost("/api/control-sessions/heartbeat", async (ControlSessionHeartbeat heartbeat, HttpRequest httpRequest) =>
+app.MapPost("/api/control-sessions/heartbeat", async (ControlSessionHeartbeat heartbeat, HttpContext context) =>
 {
     if (string.IsNullOrWhiteSpace(heartbeat.Id)) return Results.BadRequest();
+    Guid organizationId = CurrentOrganization(context);
+    string sessionKey = OrganizationKey(organizationId, heartbeat.Id);
     DateTimeOffset now = DateTimeOffset.UtcNow;
-    controlSessions.AddOrUpdate(heartbeat.Id,
-        _ => new ControlSessionStatus { Id = heartbeat.Id, Usuario = heartbeat.Usuario, Equipo = heartbeat.Equipo,
+    controlSessions.AddOrUpdate(sessionKey,
+        _ => new ControlSessionStatus { Id = heartbeat.Id, OrganizationId = organizationId, Usuario = heartbeat.Usuario, Equipo = heartbeat.Equipo,
             Plataforma = heartbeat.Plataforma, Version = heartbeat.Version, Nombre = string.IsNullOrWhiteSpace(heartbeat.Nombre) ? $"{heartbeat.Usuario} @ {heartbeat.Equipo}" : heartbeat.Nombre,
             EstadoActualizacion = heartbeat.EstadoActualizacion, UltimaConexionUtc = now, Activa = true },
         (_, current) => { current.Usuario = heartbeat.Usuario; current.Equipo = heartbeat.Equipo; current.Plataforma = heartbeat.Plataforma;
@@ -216,8 +250,8 @@ app.MapPost("/api/control-sessions/heartbeat", async (ControlSessionHeartbeat he
             if (Version.TryParse(heartbeat.Version, out var installed) && Version.TryParse(expected, out var latest) && installed >= latest) current.EstadoActualizacion = "Actualizado";
             else if (heartbeat.EstadoActualizacion is "Descargando" or "Instalando" or "Error") current.EstadoActualizacion = heartbeat.EstadoActualizacion;
             current.UltimaConexionUtc = now; current.Activa = true; return current; });
-    int count = controlSessions.Values.Count(x => x.UltimaConexionUtc >= now.AddSeconds(-35));
-    ControlSessionStatus currentSession = controlSessions[heartbeat.Id];
+    int count = controlSessions.Values.Count(x => x.OrganizationId == organizationId && x.UltimaConexionUtc >= now.AddSeconds(-35));
+    ControlSessionStatus currentSession = controlSessions[sessionKey];
     bool isMac = heartbeat.Plataforma.Contains("mac", StringComparison.OrdinalIgnoreCase);
     string version = isMac ? latestMacControlVersion : latestWindowsControlVersion;
     string packagePath = isMac ? controlMacPackagePath : controlWindowsPackagePath;
@@ -225,15 +259,16 @@ app.MapPost("/api/control-sessions/heartbeat", async (ControlSessionHeartbeat he
     if (updateNow) { currentSession.ActualizacionSolicitada = false; currentSession.EstadoActualizacion = "Descargando"; }
     await GuardarSesionesPanelAsync();
     return Results.Ok(new ControlSessionHeartbeatResponse { Activas = count, ActualizarAhora = updateNow,
-        Version = version, Url = File.Exists(packagePath) ? $"{httpRequest.Scheme}://{httpRequest.Host}/api/control-update/download/{(isMac ? "macos" : "windows")}" : "" });
+        Version = version, Url = File.Exists(packagePath) ? $"{context.Request.Scheme}://{context.Request.Host}/api/control-update/download/{(isMac ? "macos" : "windows")}" : "" });
 });
 
-app.MapGet("/api/control-sessions", () =>
+app.MapGet("/api/control-sessions", (HttpContext context) =>
 {
+    Guid organizationId = CurrentOrganization(context);
     DateTimeOffset limit = DateTimeOffset.UtcNow.AddSeconds(-35);
-    return controlSessions.Values.Select(x => new ControlSessionStatus
+    return controlSessions.Values.Where(x => x.OrganizationId == organizationId).Select(x => new ControlSessionStatus
     {
-        Id = x.Id, Usuario = x.Usuario, Equipo = x.Equipo, Plataforma = x.Plataforma,
+        Id = x.Id, OrganizationId = x.OrganizationId, Usuario = x.Usuario, Equipo = x.Equipo, Plataforma = x.Plataforma,
         Version = x.Version, Nombre = x.Nombre, EstadoActualizacion = x.EstadoActualizacion,
         UltimaConexionUtc = x.UltimaConexionUtc, Activa = x.UltimaConexionUtc >= limit,
         ActualizacionSolicitada = x.ActualizacionSolicitada,
@@ -243,9 +278,9 @@ app.MapGet("/api/control-sessions", () =>
     }).Where(x => x.Activa).OrderBy(x => x.Usuario);
 });
 
-app.MapPut("/api/control-sessions/{id}/name", async (string id, RenameAgentRequest request) =>
+app.MapPut("/api/control-sessions/{id}/name", async (string id, RenameAgentRequest request, HttpContext context) =>
 {
-    if (!controlSessions.TryGetValue(id, out ControlSessionStatus? session)) return Results.NotFound();
+    if (!controlSessions.TryGetValue(OrganizationKey(CurrentOrganization(context), id), out ControlSessionStatus? session)) return Results.NotFound();
     string name = request.Nombre.Trim();
     if (name.Length is < 1 or > 60) return Results.BadRequest(new { error = "El nombre debe tener entre 1 y 60 caracteres." });
     session.Nombre = name; await GuardarSesionesPanelAsync(); return Results.Ok(new { updated = true, nombre = name });
@@ -273,11 +308,12 @@ app.MapPost("/api/control-update/package/{platform}", async (string platform, Ht
     return Results.Ok(new { platform, bytes = file.Length });
 }).DisableAntiforgery();
 
-app.MapPost("/api/control-update/request", async (ControlUpdateRequest request) =>
+app.MapPost("/api/control-update/request", async (ControlUpdateRequest request, HttpContext context) =>
 {
+    Guid organizationId = CurrentOrganization(context);
     int count = 0;
     foreach (string id in request.SessionIds.Distinct(StringComparer.OrdinalIgnoreCase))
-        if (controlSessions.TryGetValue(id, out ControlSessionStatus? session))
+        if (controlSessions.TryGetValue(OrganizationKey(organizationId, id), out ControlSessionStatus? session))
         { session.ActualizacionSolicitada = true; session.EstadoActualizacion = "Pendiente"; count++; }
     await GuardarSesionesPanelAsync();
     await RegistrarEventoAsync("SERVER", "Centro de Control", "ACTUALIZACION_PANELES_SOLICITADA", $"Se enviaron {count} ordenes de actualizacion.");
@@ -291,17 +327,19 @@ app.MapGet("/api/control-update/download/{platform}", (string platform) =>
     return File.Exists(path) ? Results.File(path, "application/octet-stream", mac ? "ARES-Control.pkg" : "ARES-Control.zip") : Results.NotFound();
 });
 
-app.MapPost("/api/agents/heartbeat", async (AgentHeartbeat heartbeat, HttpRequest httpRequest) =>
+app.MapPost("/api/agents/heartbeat", async (AgentHeartbeat heartbeat, HttpContext context) =>
 {
     if (string.IsNullOrWhiteSpace(heartbeat.Id) || string.IsNullOrWhiteSpace(heartbeat.Equipo))
         return Results.BadRequest(new { error = "Identidad de agente incompleta." });
 
-    bool estabaEnLinea = agents.TryGetValue(heartbeat.Id, out AgentStatus? anterior) && anterior.EstaEnLinea;
+    Guid organizationId = CurrentOrganization(context);
+    string agentKey = OrganizationKey(organizationId, heartbeat.Id);
+    bool estabaEnLinea = agents.TryGetValue(agentKey, out AgentStatus? anterior) && anterior.EstaEnLinea;
     DateTimeOffset ahora = DateTimeOffset.UtcNow;
-    AgentStatus agenteActual = agents.AddOrUpdate(heartbeat.Id,
+    AgentStatus agenteActual = agents.AddOrUpdate(agentKey,
         _ => new AgentStatus
         {
-            Id = heartbeat.Id, Equipo = heartbeat.Equipo, Usuario = heartbeat.Usuario,
+            Id = heartbeat.Id, OrganizationId = organizationId, Equipo = heartbeat.Equipo, Usuario = heartbeat.Usuario,
             Sistema = heartbeat.Sistema, Version = heartbeat.Version,
             UltimaConexionUtc = ahora, EstaEnLinea = true,
             // El estado local puede provenir del horario cacheado; no debe convertirse
@@ -327,9 +365,10 @@ app.MapPost("/api/agents/heartbeat", async (AgentHeartbeat heartbeat, HttpReques
             return existente;
         });
     if (!estabaEnLinea)
-        await RegistrarEventoAsync(heartbeat.Id, heartbeat.Equipo, "AGENTE_CONECTADO", "ARES Agent inició o recuperó la conexión.");
+        await RegistrarEventoAsync(heartbeat.Id, heartbeat.Equipo, "AGENTE_CONECTADO", "ARES Agent inició o recuperó la conexión.", organizationId);
     await GuardarAsync();
-    GroupPolicy policy = groupPolicies.FirstOrDefault(p => p.Grupo == agenteActual.Grupo) ?? new();
+    ScheduleState organizationSchedule = GetSchedule(organizationId);
+    GroupPolicy policy = GetPolicies(organizationId).FirstOrDefault(p => p.Grupo == agenteActual.Grupo) ?? new();
     bool actualizarAhora = agenteActual.ActualizacionSolicitada && heartbeat.EsServicioSistema;
     if (actualizarAhora) agenteActual.ActualizacionSolicitada = false;
     return Results.Ok(new HeartbeatResponse
@@ -337,23 +376,23 @@ app.MapPost("/api/agents/heartbeat", async (AgentHeartbeat heartbeat, HttpReques
         Accepted = true,
         ServerTimeUtc = DateTimeOffset.UtcNow,
         BloqueadoAdministrativamente = agenteActual.BloqueadoAdministrativamente
-        ,HorarioVersion = schedule.Version
-        ,Horarios = schedule.Horarios.Where(h => h.AgentId.Equals(heartbeat.Id, StringComparison.OrdinalIgnoreCase)).ToList()
+        ,HorarioVersion = organizationSchedule.Version
+        ,Horarios = organizationSchedule.Horarios.Where(h => h.AgentId.Equals(heartbeat.Id, StringComparison.OrdinalIgnoreCase)).ToList()
         ,ExcepcionHastaUtc = agenteActual.ExcepcionHastaUtc
         ,ExcepcionPermitirUso = agenteActual.ExcepcionPermitirUso
         ,MargenEntradaMinutos = policy.MargenEntradaMinutos
         ,MargenSalidaMinutos = policy.MargenSalidaMinutos
         ,UltimaVersion = latestAgentVersion
         ,UrlActualizacion = File.Exists(updatePackagePath)
-            ? $"{httpRequest.Scheme}://{httpRequest.Host}/api/update-package/download"
+            ? $"{context.Request.Scheme}://{context.Request.Host}/api/update-package/download"
             : agentUpdateUrl
         ,ActualizarAhora = actualizarAhora
     });
 });
 
-app.MapPut("/api/agents/{id}/group", async (string id, GroupRequest request) =>
+app.MapPut("/api/agents/{id}/group", async (string id, GroupRequest request, HttpContext context) =>
 {
-    if (!agents.TryGetValue(id, out AgentStatus? agente)) return Results.NotFound();
+    AgentStatus? agente = FindAgent(context, id); if (agente is null) return Results.NotFound();
     string[] validos = ["Grupo 1", "Grupo 2", "Grupo 3"];
     if (!validos.Contains(request.Grupo)) return Results.BadRequest(new { error = "Grupo invalido." });
     agente.Grupo = request.Grupo;
@@ -361,22 +400,27 @@ app.MapPut("/api/agents/{id}/group", async (string id, GroupRequest request) =>
     return Results.Ok(new { updated = true });
 });
 
-app.MapGet("/api/schedule", () => schedule);
-app.MapGet("/api/schedule/history", () => scheduleHistory.OrderByDescending(x => x.FechaUtc).Take(20));
-app.MapGet("/api/group-policies", () => groupPolicies);
+app.MapGet("/api/schedule", (HttpContext context) => GetSchedule(CurrentOrganization(context)));
+app.MapGet("/api/schedule/history", (HttpContext context) => GetScheduleHistory(CurrentOrganization(context)).OrderByDescending(x => x.FechaUtc).Take(20));
+app.MapGet("/api/group-policies", (HttpContext context) => GetPolicies(CurrentOrganization(context)));
 
-app.MapPut("/api/group-policies", async (GroupPoliciesRequest request) =>
+app.MapPut("/api/group-policies", async (GroupPoliciesRequest request, HttpContext context) =>
 {
     if (request.Grupos.Any(x => x.MargenEntradaMinutos is < 0 or > 180 || x.MargenSalidaMinutos is < 0 or > 180))
         return Results.BadRequest(new { error = "Los margenes deben estar entre 0 y 180 minutos." });
-    groupPolicies = request.Grupos.Where(x => new[] { "Grupo 1", "Grupo 2", "Grupo 3" }.Contains(x.Grupo)).ToList();
-    await SaveStateAsync("group-policies", policiesPath, groupPolicies);
-    await RegistrarEventoAsync("SERVER", "Servidor ARES", "POLITICAS_GRUPO_ACTUALIZADAS", "Se actualizaron los margenes de entrada y salida.");
-    return Results.Ok(groupPolicies);
+    Guid organizationId = CurrentOrganization(context);
+    List<GroupPolicy> policies = request.Grupos.Where(x => new[] { "Grupo 1", "Grupo 2", "Grupo 3" }.Contains(x.Grupo)).ToList();
+    policiesByOrganization[organizationId] = policies;
+    await SaveOrganizationStateAsync("group-policies", organizationId, policiesPath, policies);
+    await RegistrarEventoAsync("SERVER", "Servidor ARES", "POLITICAS_GRUPO_ACTUALIZADAS", "Se actualizaron los margenes de entrada y salida.", organizationId);
+    return Results.Ok(policies);
 });
 
-app.MapPut("/api/schedule", async (SchedulePublication publication) =>
+app.MapPut("/api/schedule", async (SchedulePublication publication, HttpContext context) =>
 {
+    Guid organizationId = CurrentOrganization(context);
+    ScheduleState schedule = GetSchedule(organizationId);
+    List<ScheduleRevision> scheduleHistory = GetScheduleHistory(organizationId);
     if (publication.Mes is < 1 or > 12 || publication.Anio is < 2020 or > 2200)
         return Results.BadRequest(new { error = "Mes o anio invalido." });
     if (publication.Horarios.Any(h => h.FinUtc <= h.InicioUtc || string.IsNullOrWhiteSpace(h.AgentId)))
@@ -392,39 +436,44 @@ app.MapPut("/api/schedule", async (SchedulePublication publication) =>
     };
     scheduleHistory.Add(new ScheduleRevision { FechaUtc = DateTimeOffset.UtcNow, Accion = "Publicada", Estado = ClonarHorario(schedule) });
     while (scheduleHistory.Count > 30) scheduleHistory.RemoveAt(0);
-    await GuardarHorariosAsync();
+    schedules[organizationId] = schedule;
+    await GuardarHorariosAsync(organizationId);
     await RegistrarEventoAsync("SERVER", "Servidor ARES", "HORARIOS_PUBLICADOS",
-        $"Se publicaron {schedule.Horarios.Count} turnos para {schedule.Mes:00}/{schedule.Anio}.");
+        $"Se publicaron {schedule.Horarios.Count} turnos para {schedule.Mes:00}/{schedule.Anio}.", organizationId);
     return Results.Ok(schedule);
 });
 
-app.MapPost("/api/schedule/rollback", async (RollbackScheduleRequest request) =>
+app.MapPost("/api/schedule/rollback", async (RollbackScheduleRequest request, HttpContext context) =>
 {
+    Guid organizationId = CurrentOrganization(context);
+    ScheduleState schedule = GetSchedule(organizationId);
+    List<ScheduleRevision> scheduleHistory = GetScheduleHistory(organizationId);
     ScheduleRevision? revision = scheduleHistory.FirstOrDefault(x => x.Id == request.RevisionId);
     if (revision is null) return Results.NotFound(new { error = "Revision no encontrada." });
     scheduleHistory.Add(new ScheduleRevision { FechaUtc = DateTimeOffset.UtcNow, Accion = "Antes de restaurar", Estado = ClonarHorario(schedule) });
     schedule = ClonarHorario(revision.Estado); schedule.Version = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(); schedule.PublicadoUtc = DateTimeOffset.UtcNow;
-    await GuardarHorariosAsync();
-    await RegistrarEventoAsync("SERVER", "Servidor ARES", "HORARIOS_RESTAURADOS", $"Se restauro la revision {revision.Id}.");
+    schedules[organizationId] = schedule;
+    await GuardarHorariosAsync(organizationId);
+    await RegistrarEventoAsync("SERVER", "Servidor ARES", "HORARIOS_RESTAURADOS", $"Se restauro la revision {revision.Id}.", organizationId);
     return Results.Ok(schedule);
 });
 
-app.MapPut("/api/agents/{id}/override", async (string id, TemporaryOverrideRequest request) =>
+app.MapPut("/api/agents/{id}/override", async (string id, TemporaryOverrideRequest request, HttpContext context) =>
 {
-    if (!agents.TryGetValue(id, out AgentStatus? agente)) return Results.NotFound();
+    AgentStatus? agente = FindAgent(context, id); if (agente is null) return Results.NotFound();
     if (request.HastaUtc <= DateTimeOffset.UtcNow || request.HastaUtc > DateTimeOffset.UtcNow.AddDays(31))
         return Results.BadRequest(new { error = "La excepcion debe vencer en el futuro y dentro de 31 dias." });
     agente.ExcepcionPermitirUso = request.PermitirUso; agente.ExcepcionHastaUtc = request.HastaUtc;
     await RegistrarEventoAsync(id, agente.Equipo, request.PermitirUso ? "EXCEPCION_DESBLOQUEO" : "EXCEPCION_BLOQUEO",
-        $"{request.Motivo}. Vigente hasta {request.HastaUtc:u}.");
+        $"{request.Motivo}. Vigente hasta {request.HastaUtc:u}.", agente.OrganizationId);
     await GuardarAsync(); return Results.Ok();
 });
 
-app.MapPost("/api/agents/{id}/update", async (string id) =>
+app.MapPost("/api/agents/{id}/update", async (string id, HttpContext context) =>
 {
-    if (!agents.TryGetValue(id, out AgentStatus? agente)) return Results.NotFound();
+    AgentStatus? agente = FindAgent(context, id); if (agente is null) return Results.NotFound();
     agente.ActualizacionSolicitada = true;
-    await RegistrarEventoAsync(id, agente.Equipo, "ACTUALIZACION_SOLICITADA", $"Se solicito actualizar ARES Agent a {latestAgentVersion}.");
+    await RegistrarEventoAsync(id, agente.Equipo, "ACTUALIZACION_SOLICITADA", $"Se solicito actualizar ARES Agent a {latestAgentVersion}.", agente.OrganizationId);
     await GuardarAsync(); return Results.Ok();
 });
 
@@ -453,15 +502,16 @@ app.MapGet("/api/update-package/download", () => File.Exists(updatePackagePath)
     ? Results.File(updatePackagePath, "application/zip", "ARES-Agent-Update.zip")
     : Results.NotFound());
 
-app.MapDelete("/api/agents/{id}/override", async (string id) =>
+app.MapDelete("/api/agents/{id}/override", async (string id, HttpContext context) =>
 {
-    if (!agents.TryGetValue(id, out AgentStatus? agente)) return Results.NotFound();
+    AgentStatus? agente = FindAgent(context, id); if (agente is null) return Results.NotFound();
     agente.ExcepcionPermitirUso = null; agente.ExcepcionHastaUtc = null; await GuardarAsync(); return Results.Ok();
 });
 
-app.MapPut("/api/agents/{id}/restriction", async (string id, RestrictionRequest request) =>
+app.MapPut("/api/agents/{id}/restriction", async (string id, RestrictionRequest request, HttpContext context) =>
 {
-    if (!agents.TryGetValue(id, out AgentStatus? agente))
+    AgentStatus? agente = FindAgent(context, id);
+    if (agente is null)
         return Results.NotFound(new { error = "El agente no está registrado." });
 
     agente.BloqueadoAdministrativamente = request.Bloqueado;
@@ -469,14 +519,15 @@ app.MapPut("/api/agents/{id}/restriction", async (string id, RestrictionRequest 
     agente.SolicitudDesbloqueoUtc = null;
     await RegistrarEventoAsync(id, agente.Equipo,
         request.Bloqueado ? "USUARIO_BLOQUEADO" : "USUARIO_DESBLOQUEADO",
-        request.Bloqueado ? "Restricción activada desde la consola ARES." : "Restricción retirada desde la consola ARES.");
+        request.Bloqueado ? "Restricción activada desde la consola ARES." : "Restricción retirada desde la consola ARES.", agente.OrganizationId);
     await GuardarAsync();
     return Results.Ok(new { updated = true, bloqueado = request.Bloqueado });
 });
 
-app.MapPost("/api/agents/{id}/unlock-request", async (string id) =>
+app.MapPost("/api/agents/{id}/unlock-request", async (string id, HttpContext context) =>
 {
-    if (!agents.TryGetValue(id, out AgentStatus? agente))
+    AgentStatus? agente = FindAgent(context, id);
+    if (agente is null)
         return Results.NotFound(new { error = "El agente no está registrado." });
     if (!agente.BloqueadoAdministrativamente && !agente.BloqueadoLocalmente && CalcularMotivo(agente) is not "Fuera del horario" and not "Excepcion: bloqueo temporal")
         return Results.Conflict(new { error = "El equipo no está bloqueado." });
@@ -486,21 +537,22 @@ app.MapPost("/api/agents/{id}/unlock-request", async (string id) =>
         agente.SolicitudDesbloqueoPendiente = true;
         agente.SolicitudDesbloqueoUtc = DateTimeOffset.UtcNow;
         await RegistrarEventoAsync(id, agente.Equipo, "SOLICITUD_DESBLOQUEO",
-            "El usuario solicitó al administrador que retire la restricción.");
+            "El usuario solicitó al administrador que retire la restricción.", agente.OrganizationId);
         await GuardarAsync();
     }
     return Results.Ok(new { received = true, requestedAtUtc = agente.SolicitudDesbloqueoUtc });
 });
 
-app.MapPut("/api/agents/{id}/name", async (string id, RenameAgentRequest request) =>
+app.MapPut("/api/agents/{id}/name", async (string id, RenameAgentRequest request, HttpContext context) =>
 {
-    if (!agents.TryGetValue(id, out AgentStatus? agente))
+    AgentStatus? agente = FindAgent(context, id);
+    if (agente is null)
         return Results.NotFound(new { error = "El agente no está registrado." });
     string nombre = request.Nombre.Trim();
     if (nombre.Length is < 1 or > 50)
         return Results.BadRequest(new { error = "El nombre debe tener entre 1 y 50 caracteres." });
     agente.NombrePersonalizado = nombre;
-    await RegistrarEventoAsync(id, nombre, "EQUIPO_RENOMBRADO", $"Nombre real: {agente.Equipo}.");
+    await RegistrarEventoAsync(id, nombre, "EQUIPO_RENOMBRADO", $"Nombre real: {agente.Equipo}.", agente.OrganizationId);
     await GuardarAsync();
     return Results.Ok(new { updated = true, nombre });
 });
@@ -536,26 +588,27 @@ app.MapPost("/solicitar/{token}", async (string token) =>
     agente.SolicitudDesbloqueoPendiente = true;
     agente.SolicitudDesbloqueoUtc = ahora;
     await RegistrarEventoAsync(agente.Id, agente.Equipo, "SOLICITUD_DESBLOQUEO",
-        "Solicitud enviada desde el portal móvil del equipo.");
+        "Solicitud enviada desde el portal móvil del equipo.", agente.OrganizationId);
     await GuardarAsync();
     return Results.Content("Solicitud enviada correctamente. El administrador ya fue notificado.", "text/plain; charset=utf-8");
 });
 
-app.MapPost("/api/agents/{id}/closed", async (string id) =>
+app.MapPost("/api/agents/{id}/closed", async (string id, HttpContext context) =>
 {
-    if (!agents.TryGetValue(id, out AgentStatus? agente)) return Results.NotFound();
+    AgentStatus? agente = FindAgent(context, id); if (agente is null) return Results.NotFound();
     agente.EstaEnLinea = false;
-    await RegistrarEventoAsync(id, agente.Equipo, "AGENTE_CERRADO", "El agente notificó un cierre normal.");
+    await RegistrarEventoAsync(id, agente.Equipo, "AGENTE_CERRADO", "El agente notificó un cierre normal.", agente.OrganizationId);
     await GuardarAsync();
     return Results.Ok();
 });
 
-app.MapGet("/api/audit", () => audit.OrderByDescending(e => e.FechaUtc).Take(500));
+app.MapGet("/api/audit", (HttpContext context) => audit.Where(e => e.OrganizationId == CurrentOrganization(context)).OrderByDescending(e => e.FechaUtc).Take(500));
 
-app.MapGet("/api/agents", () =>
+app.MapGet("/api/agents", (HttpContext context) =>
 {
+    Guid organizationId = CurrentOrganization(context);
     DateTimeOffset limite = DateTimeOffset.UtcNow.AddSeconds(-35);
-    return agents.Values
+    return agents.Values.Where(a => a.OrganizationId == organizationId)
         .Select(a => new AgentStatus
         {
             Id = a.Id, Equipo = a.Equipo, Usuario = a.Usuario, Sistema = a.Sistema,
@@ -571,20 +624,22 @@ app.MapGet("/api/agents", () =>
             ,ExcepcionHastaUtc = a.ExcepcionHastaUtc
             ,ExcepcionPermitirUso = a.ExcepcionPermitirUso
             ,MotivoBloqueo = CalcularMotivo(a)
-            ,ProximoCambioUtc = CalcularProximoCambio(a.Id)
+            ,ProximoCambioUtc = CalcularProximoCambio(a)
             ,ActualizacionDisponible = Version.TryParse(latestAgentVersion, out var latest) && Version.TryParse(a.Version, out var current) && latest > current
             ,UltimaVersion = latestAgentVersion
-            ,HorarioPendienteSincronizar = schedule.Horarios.Any(x => x.AgentId.Equals(a.Id, StringComparison.OrdinalIgnoreCase)) && a.HorarioVersionAplicada < schedule.Version
+            ,HorarioPendienteSincronizar = HorarioPendiente(a)
         })
         .OrderBy(a => a.Equipo);
 });
 
-app.MapDelete("/api/agents", async () =>
+app.MapDelete("/api/agents", async (HttpContext context) =>
 {
-    int eliminados = agents.Count;
-    agents.Clear();
+    Guid organizationId = CurrentOrganization(context);
+    string[] keys = agents.Where(x => x.Value.OrganizationId == organizationId).Select(x => x.Key).ToArray();
+    int eliminados = 0;
+    foreach (string key in keys) if (agents.TryRemove(key, out _)) eliminados++;
     await RegistrarEventoAsync("SERVER", "Servidor ARES", "LISTA_EQUIPOS_LIMPIADA",
-        $"Se eliminaron {eliminados} equipos registrados. Los agentes conectados volverán a registrarse automáticamente.");
+        $"Se eliminaron {eliminados} equipos registrados. Los agentes conectados volverán a registrarse automáticamente.", organizationId);
     await GuardarAsync();
     return Results.Ok(new { deleted = eliminados });
 });
@@ -602,17 +657,18 @@ async Task MonitorOfflineAsync(CancellationToken cancelacion)
         {
             agente.EstaEnLinea = false;
             await RegistrarEventoAsync(agente.Id, agente.Equipo, "AGENTE_DESCONECTADO",
-                "El agente dejó de responder; hora estimada por vencimiento del heartbeat.");
+                "El agente dejó de responder; hora estimada por vencimiento del heartbeat.", agente.OrganizationId);
             await GuardarAsync();
         }
     }
 }
 
-async Task RegistrarEventoAsync(string agentId, string equipo, string tipo, string detalle)
+async Task RegistrarEventoAsync(string agentId, string equipo, string tipo, string detalle, Guid? organizationId = null)
 {
     audit.Enqueue(new AgentAuditEvent
     {
         AgentId = agentId,
+        OrganizationId = organizationId ?? AresPersistence.DefaultOrganizationId,
         Equipo = equipo,
         Tipo = tipo,
         Detalle = detalle,
@@ -671,11 +727,14 @@ async Task GuardarAsync()
     finally { saveLock.Release(); }
 }
 
-async Task GuardarHorariosAsync()
+async Task GuardarHorariosAsync(Guid organizationId)
 {
-    await SaveStateAsync("schedule", schedulePath, schedule);
-    await SaveStateAsync("schedule-history", historyPath, scheduleHistory);
+    await SaveOrganizationStateAsync("schedule", organizationId, schedulePath, GetSchedule(organizationId));
+    await SaveOrganizationStateAsync("schedule-history", organizationId, historyPath, GetScheduleHistory(organizationId));
 }
+
+Task SaveOrganizationStateAsync<T>(string key, Guid organizationId, string legacyPath, T value) =>
+    SaveStateAsync(organizationId == AresPersistence.DefaultOrganizationId ? key : $"org:{organizationId:N}:{key}", legacyPath, value);
 
 async Task GuardarSesionesPanelAsync()
 {
@@ -717,21 +776,35 @@ string CalcularMotivo(AgentStatus agent)
     if (agent.ExcepcionHastaUtc > now && agent.ExcepcionPermitirUso.HasValue)
         return agent.ExcepcionPermitirUso.Value ? "Excepcion: uso permitido" : "Excepcion: bloqueo temporal";
     if (agent.BloqueadoAdministrativamente) return "Bloqueo manual";
+    ScheduleState schedule = GetSchedule(agent.OrganizationId);
     List<ScheduleInterval> own = schedule.Horarios.Where(x => x.AgentId.Equals(agent.Id, StringComparison.OrdinalIgnoreCase)).ToList();
     if (own.Count == 0) return "Sin horario asignado";
-    GroupPolicy policy = groupPolicies.FirstOrDefault(x => x.Grupo == agent.Grupo) ?? new();
+    GroupPolicy policy = GetPolicies(agent.OrganizationId).FirstOrDefault(x => x.Grupo == agent.Grupo) ?? new();
     bool inside = own.Any(x => now >= x.InicioUtc.AddMinutes(-policy.MargenEntradaMinutos) && now < x.FinUtc.AddMinutes(policy.MargenSalidaMinutos));
     return inside ? "Dentro del turno" : "Fuera del horario";
 }
 
-DateTimeOffset? CalcularProximoCambio(string agentId)
+DateTimeOffset? CalcularProximoCambio(AgentStatus agent)
 {
     DateTimeOffset now = DateTimeOffset.UtcNow;
-    return schedule.Horarios.Where(x => x.AgentId.Equals(agentId, StringComparison.OrdinalIgnoreCase))
+    return GetSchedule(agent.OrganizationId).Horarios.Where(x => x.AgentId.Equals(agent.Id, StringComparison.OrdinalIgnoreCase))
         .SelectMany(x => new[] { x.InicioUtc, x.FinUtc }).Where(x => x > now).OrderBy(x => x).Cast<DateTimeOffset?>().FirstOrDefault();
 }
 
+bool HorarioPendiente(AgentStatus agent)
+{
+    ScheduleState schedule = GetSchedule(agent.OrganizationId);
+    return schedule.Horarios.Any(x => x.AgentId.Equals(agent.Id, StringComparison.OrdinalIgnoreCase)) && agent.HorarioVersionAplicada < schedule.Version;
+}
+
 AuthenticatedAdmin CurrentAdmin(HttpContext context) => (AuthenticatedAdmin)context.Items["AresAdmin"]!;
+Guid CurrentOrganization(HttpContext context) => context.Items["AresOrganizationId"] is Guid id ? id : AresPersistence.DefaultOrganizationId;
+string OrganizationKey(Guid organizationId, string id) => $"{organizationId:N}:{id}";
+AgentStatus? FindAgent(HttpContext context, string id) => agents.TryGetValue(OrganizationKey(CurrentOrganization(context), id), out AgentStatus? agent) ? agent : null;
+ScheduleState GetSchedule(Guid organizationId) => schedules.GetOrAdd(organizationId, _ => new ScheduleState());
+List<ScheduleRevision> GetScheduleHistory(Guid organizationId) => scheduleHistories.GetOrAdd(organizationId, _ => []);
+List<GroupPolicy> GetPolicies(Guid organizationId) => policiesByOrganization.GetOrAdd(organizationId, _ =>
+    [new() { Grupo = "Grupo 1" }, new() { Grupo = "Grupo 2" }, new() { Grupo = "Grupo 3" }]);
 bool IsOwner(HttpContext context) => context.Items["AresAdmin"] is AuthenticatedAdmin admin && admin.Role == "Owner";
 bool ValidRole(string role) => role is "Owner" or "Administrator" or "Supervisor" or "Viewer";
 byte[] HashInvitationCode(string? code) => SHA256.HashData(Encoding.UTF8.GetBytes((code ?? "").Trim().ToUpperInvariant()));

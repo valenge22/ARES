@@ -4,6 +4,7 @@ using NpgsqlTypes;
 
 internal sealed class AresPersistence
 {
+    public static readonly Guid DefaultOrganizationId = Guid.Parse("00000000-0000-0000-0000-000000000001");
     private readonly string? connectionString;
     private readonly JsonSerializerOptions jsonOptions = new(JsonSerializerDefaults.Web);
 
@@ -49,6 +50,18 @@ internal sealed class AresPersistence
         await connection.OpenAsync();
         await using var command = connection.CreateCommand();
         command.CommandText = """
+            create table if not exists ares_organizations (
+                organization_id uuid primary key,
+                name varchar(120) not null,
+                slug varchar(80) not null unique,
+                enabled boolean not null default true,
+                created_at timestamptz not null default now(),
+                updated_at timestamptz not null default now()
+            );
+            insert into ares_organizations(organization_id,name,slug)
+            values ('00000000-0000-0000-0000-000000000001','Organización principal','principal')
+            on conflict (organization_id) do nothing;
+
             create table if not exists ares_state (
                 state_key text primary key,
                 state_value jsonb not null,
@@ -68,6 +81,9 @@ internal sealed class AresPersistence
             );
 
             alter table ares_admin_users add column if not exists email varchar(320);
+            alter table ares_admin_users add column if not exists organization_id uuid;
+            update ares_admin_users set organization_id='00000000-0000-0000-0000-000000000001' where organization_id is null;
+            alter table ares_admin_users alter column organization_id set not null;
 
             create table if not exists ares_registration_requests (
                 user_id uuid primary key,
@@ -79,6 +95,10 @@ internal sealed class AresPersistence
                 reviewed_by uuid,
                 constraint ck_ares_registration_status check (status in ('Pending', 'Approved', 'Rejected'))
             );
+            alter table ares_registration_requests add column if not exists organization_id uuid;
+            alter table ares_registration_requests add column if not exists invited_role varchar(20) not null default 'Viewer';
+            update ares_registration_requests set organization_id='00000000-0000-0000-0000-000000000001' where organization_id is null;
+            alter table ares_registration_requests alter column organization_id set not null;
 
             create table if not exists ares_invitation_codes (
                 invitation_id uuid primary key,
@@ -92,16 +112,22 @@ internal sealed class AresPersistence
                 created_at timestamptz not null default now(),
                 constraint ck_ares_invitation_uses check (max_uses between 1 and 1000 and used_count >= 0)
             );
+            alter table ares_invitation_codes add column if not exists organization_id uuid;
+            alter table ares_invitation_codes add column if not exists invited_role varchar(20) not null default 'Viewer';
+            update ares_invitation_codes set organization_id='00000000-0000-0000-0000-000000000001' where organization_id is null;
+            alter table ares_invitation_codes alter column organization_id set not null;
 
             alter table ares_state enable row level security;
             alter table ares_admin_users enable row level security;
             alter table ares_registration_requests enable row level security;
             alter table ares_invitation_codes enable row level security;
+            alter table ares_organizations enable row level security;
 
             revoke all on table ares_state from anon, authenticated;
             revoke all on table ares_admin_users from anon, authenticated;
             revoke all on table ares_registration_requests from anon, authenticated;
             revoke all on table ares_invitation_codes from anon, authenticated;
+            revoke all on table ares_organizations from anon, authenticated;
             """;
         await command.ExecuteNonQueryAsync();
     }
@@ -119,15 +145,27 @@ internal sealed class AresPersistence
         await connection.OpenAsync();
         await using var command = connection.CreateCommand();
         command.CommandText = """
-            insert into ares_admin_users (user_id, display_name, role, enabled, updated_at)
-            values (@userId, @displayName, 'Owner', true, now())
+            insert into ares_admin_users (user_id, organization_id, display_name, role, enabled, updated_at)
+            values (@userId, @organizationId, @displayName, 'Owner', true, now())
             on conflict (user_id) do update
             set display_name = excluded.display_name,
-                role = 'Owner', enabled = true, updated_at = now()
+                organization_id = excluded.organization_id, role = 'Owner', enabled = true, updated_at = now()
             """;
         command.Parameters.AddWithValue("userId", ownerId);
+        command.Parameters.AddWithValue("organizationId", DefaultOrganizationId);
         command.Parameters.AddWithValue("displayName", name);
         await command.ExecuteNonQueryAsync();
+    }
+
+    public async Task<List<Guid>> GetOrganizationIdsAsync()
+    {
+        if (!UsesDatabase) return [DefaultOrganizationId];
+        var result = new List<Guid>();
+        await using var connection = new NpgsqlConnection(connectionString); await connection.OpenAsync();
+        await using var command = connection.CreateCommand(); command.CommandText = "select organization_id from ares_organizations where enabled=true";
+        await using var reader = await command.ExecuteReaderAsync();
+        while (await reader.ReadAsync()) result.Add(reader.GetGuid(0));
+        return result;
     }
 
     public async Task<AdminUser?> GetAdminAsync(Guid userId)
@@ -136,11 +174,11 @@ internal sealed class AresPersistence
         await using var connection = new NpgsqlConnection(connectionString);
         await connection.OpenAsync();
         await using var command = connection.CreateCommand();
-        command.CommandText = "select user_id, coalesce(email, ''), display_name, role, enabled from ares_admin_users where user_id = @userId";
+        command.CommandText = "select user_id, organization_id, coalesce(email, ''), display_name, role, enabled from ares_admin_users where user_id = @userId";
         command.Parameters.AddWithValue("userId", userId);
         await using var reader = await command.ExecuteReaderAsync();
         return await reader.ReadAsync()
-            ? new AdminUser(reader.GetGuid(0), reader.GetString(1), reader.GetString(2), reader.GetString(3), reader.GetBoolean(4))
+            ? new AdminUser(reader.GetGuid(0), reader.GetGuid(1), reader.GetString(2), reader.GetString(3), reader.GetString(4), reader.GetBoolean(5))
             : null;
     }
 
@@ -152,110 +190,119 @@ internal sealed class AresPersistence
         command.Parameters.AddWithValue("id", userId); command.Parameters.AddWithValue("email", email); await command.ExecuteNonQueryAsync();
     }
 
-    public async Task RegisterPendingAsync(Guid userId, string email, string displayName)
+    public async Task RegisterPendingAsync(Guid userId, Guid organizationId, string invitedRole, string email, string displayName)
     {
         await using var connection = new NpgsqlConnection(connectionString);
         await connection.OpenAsync();
         await using var command = connection.CreateCommand();
         command.CommandText = """
-            insert into ares_registration_requests (user_id, email, display_name, status, requested_at)
-            values (@id, @email, @name, 'Pending', now())
+            insert into ares_registration_requests (user_id, organization_id, invited_role, email, display_name, status, requested_at)
+            values (@id, @organization, @role, @email, @name, 'Pending', now())
             on conflict (user_id) do update set email=excluded.email, display_name=excluded.display_name,
+                organization_id=excluded.organization_id, invited_role=excluded.invited_role,
                 status='Pending', requested_at=now(), reviewed_at=null, reviewed_by=null
             """;
-        command.Parameters.AddWithValue("id", userId); command.Parameters.AddWithValue("email", email); command.Parameters.AddWithValue("name", displayName);
+        command.Parameters.AddWithValue("id", userId); command.Parameters.AddWithValue("organization", organizationId); command.Parameters.AddWithValue("role", invitedRole);
+        command.Parameters.AddWithValue("email", email); command.Parameters.AddWithValue("name", displayName);
         await command.ExecuteNonQueryAsync();
     }
 
-    public async Task<List<RegistrationRequestInfo>> GetRegistrationsAsync()
+    public async Task<List<RegistrationRequestInfo>> GetRegistrationsAsync(Guid organizationId)
     {
         var result = new List<RegistrationRequestInfo>();
         await using var connection = new NpgsqlConnection(connectionString); await connection.OpenAsync();
         await using var command = connection.CreateCommand();
-        command.CommandText = "select user_id,email,display_name,status,requested_at,reviewed_at from ares_registration_requests order by requested_at desc";
+        command.CommandText = "select user_id,email,display_name,status,requested_at,reviewed_at from ares_registration_requests where organization_id=@organization order by requested_at desc";
+        command.Parameters.AddWithValue("organization", organizationId);
         await using var reader = await command.ExecuteReaderAsync();
         while (await reader.ReadAsync()) result.Add(new(reader.GetGuid(0), reader.GetString(1), reader.GetString(2), reader.GetString(3), reader.GetFieldValue<DateTimeOffset>(4), reader.IsDBNull(5) ? null : reader.GetFieldValue<DateTimeOffset>(5)));
         return result;
     }
 
-    public async Task<List<AdminUser>> GetAdminsAsync()
+    public async Task<List<AdminUser>> GetAdminsAsync(Guid organizationId)
     {
         var result = new List<AdminUser>();
         await using var connection = new NpgsqlConnection(connectionString); await connection.OpenAsync();
-        await using var command = connection.CreateCommand(); command.CommandText = "select user_id,coalesce(email,''),display_name,role,enabled from ares_admin_users order by display_name";
+        await using var command = connection.CreateCommand(); command.CommandText = "select user_id,organization_id,coalesce(email,''),display_name,role,enabled from ares_admin_users where organization_id=@organization order by display_name";
+        command.Parameters.AddWithValue("organization", organizationId);
         await using var reader = await command.ExecuteReaderAsync();
-        while (await reader.ReadAsync()) result.Add(new(reader.GetGuid(0), reader.GetString(1), reader.GetString(2), reader.GetString(3), reader.GetBoolean(4)));
+        while (await reader.ReadAsync()) result.Add(new(reader.GetGuid(0), reader.GetGuid(1), reader.GetString(2), reader.GetString(3), reader.GetString(4), reader.GetBoolean(5)));
         return result;
     }
 
-    public async Task<bool> ApproveAsync(Guid userId, string role, Guid reviewer)
+    public async Task<bool> ApproveAsync(Guid userId, Guid organizationId, string role, Guid reviewer)
     {
         await using var connection = new NpgsqlConnection(connectionString); await connection.OpenAsync(); await using var transaction = await connection.BeginTransactionAsync();
         await using var command = connection.CreateCommand(); command.Transaction = transaction;
         command.CommandText = """
-            insert into ares_admin_users(user_id,email,display_name,role,enabled,updated_at)
-            select user_id,email,display_name,@role,true,now() from ares_registration_requests where user_id=@id and status='Pending'
-            on conflict(user_id) do update set email=excluded.email,display_name=excluded.display_name,role=excluded.role,enabled=true,updated_at=now()
+            insert into ares_admin_users(user_id,organization_id,email,display_name,role,enabled,updated_at)
+            select user_id,organization_id,email,display_name,@role,true,now() from ares_registration_requests
+            where user_id=@id and organization_id=@organization and status='Pending'
+            on conflict(user_id) do update set organization_id=excluded.organization_id,email=excluded.email,display_name=excluded.display_name,role=excluded.role,enabled=true,updated_at=now()
             """;
-        command.Parameters.AddWithValue("id", userId); command.Parameters.AddWithValue("role", role);
+        command.Parameters.AddWithValue("id", userId); command.Parameters.AddWithValue("organization", organizationId); command.Parameters.AddWithValue("role", role);
         int changed = await command.ExecuteNonQueryAsync();
-        command.Parameters.Clear(); command.CommandText = "update ares_registration_requests set status='Approved',reviewed_at=now(),reviewed_by=@reviewer where user_id=@id";
-        command.Parameters.AddWithValue("id", userId); command.Parameters.AddWithValue("reviewer", reviewer); await command.ExecuteNonQueryAsync();
+        command.Parameters.Clear(); command.CommandText = "update ares_registration_requests set status='Approved',reviewed_at=now(),reviewed_by=@reviewer where user_id=@id and organization_id=@organization";
+        command.Parameters.AddWithValue("id", userId); command.Parameters.AddWithValue("organization", organizationId); command.Parameters.AddWithValue("reviewer", reviewer); await command.ExecuteNonQueryAsync();
         await transaction.CommitAsync(); return changed > 0;
     }
 
-    public async Task ReviewRegistrationAsync(Guid userId, string status, Guid reviewer)
+    public async Task ReviewRegistrationAsync(Guid userId, Guid organizationId, string status, Guid reviewer)
     {
         await using var connection = new NpgsqlConnection(connectionString); await connection.OpenAsync();
-        await using var command = connection.CreateCommand(); command.CommandText = "update ares_registration_requests set status=@status,reviewed_at=now(),reviewed_by=@reviewer where user_id=@id";
-        command.Parameters.AddWithValue("id", userId); command.Parameters.AddWithValue("status", status); command.Parameters.AddWithValue("reviewer", reviewer); await command.ExecuteNonQueryAsync();
+        await using var command = connection.CreateCommand(); command.CommandText = "update ares_registration_requests set status=@status,reviewed_at=now(),reviewed_by=@reviewer where user_id=@id and organization_id=@organization";
+        command.Parameters.AddWithValue("id", userId); command.Parameters.AddWithValue("organization", organizationId); command.Parameters.AddWithValue("status", status); command.Parameters.AddWithValue("reviewer", reviewer); await command.ExecuteNonQueryAsync();
     }
 
-    public async Task<bool> UpdateAdminAsync(Guid userId, string role, bool enabled)
+    public async Task<bool> UpdateAdminAsync(Guid userId, Guid organizationId, string role, bool enabled)
     {
         await using var connection = new NpgsqlConnection(connectionString); await connection.OpenAsync();
-        await using var command = connection.CreateCommand(); command.CommandText = "update ares_admin_users set role=@role,enabled=@enabled,updated_at=now() where user_id=@id and role <> 'Owner'";
-        command.Parameters.AddWithValue("id", userId); command.Parameters.AddWithValue("role", role); command.Parameters.AddWithValue("enabled", enabled); return await command.ExecuteNonQueryAsync() > 0;
+        await using var command = connection.CreateCommand(); command.CommandText = "update ares_admin_users set role=@role,enabled=@enabled,updated_at=now() where user_id=@id and organization_id=@organization and role <> 'Owner'";
+        command.Parameters.AddWithValue("id", userId); command.Parameters.AddWithValue("organization", organizationId); command.Parameters.AddWithValue("role", role); command.Parameters.AddWithValue("enabled", enabled); return await command.ExecuteNonQueryAsync() > 0;
     }
 
-    public async Task<bool> RemoveAdminAsync(Guid userId)
+    public async Task<bool> RemoveAdminAsync(Guid userId, Guid organizationId)
     {
         await using var connection = new NpgsqlConnection(connectionString); await connection.OpenAsync();
-        await using var command = connection.CreateCommand(); command.CommandText = "delete from ares_admin_users where user_id=@id and role <> 'Owner'";
-        command.Parameters.AddWithValue("id", userId); return await command.ExecuteNonQueryAsync() > 0;
+        await using var command = connection.CreateCommand(); command.CommandText = "delete from ares_admin_users where user_id=@id and organization_id=@organization and role <> 'Owner'";
+        command.Parameters.AddWithValue("id", userId); command.Parameters.AddWithValue("organization", organizationId); return await command.ExecuteNonQueryAsync() > 0;
     }
 
-    public async Task<InvitationInfo> CreateInvitationAsync(byte[] codeHash, string prefix, int maxUses, DateTimeOffset expiresAt, Guid createdBy)
+    public async Task<InvitationInfo> CreateInvitationAsync(Guid organizationId, string invitedRole, byte[] codeHash, string prefix, int maxUses, DateTimeOffset expiresAt, Guid createdBy)
     {
         Guid id = Guid.NewGuid();
         await using var connection = new NpgsqlConnection(connectionString); await connection.OpenAsync();
         await using var command = connection.CreateCommand(); command.CommandText = """
-            insert into ares_invitation_codes(invitation_id,code_hash,code_prefix,max_uses,expires_at,created_by)
-            values(@id,@hash,@prefix,@max,@expires,@creator)
+            insert into ares_invitation_codes(invitation_id,organization_id,invited_role,code_hash,code_prefix,max_uses,expires_at,created_by)
+            values(@id,@organization,@role,@hash,@prefix,@max,@expires,@creator)
             """;
-        command.Parameters.AddWithValue("id", id); command.Parameters.AddWithValue("hash", codeHash); command.Parameters.AddWithValue("prefix", prefix);
+        command.Parameters.AddWithValue("id", id); command.Parameters.AddWithValue("organization", organizationId); command.Parameters.AddWithValue("role", invitedRole);
+        command.Parameters.AddWithValue("hash", codeHash); command.Parameters.AddWithValue("prefix", prefix);
         command.Parameters.AddWithValue("max", maxUses); command.Parameters.AddWithValue("expires", expiresAt); command.Parameters.AddWithValue("creator", createdBy);
         await command.ExecuteNonQueryAsync(); return new(id, prefix, maxUses, 0, expiresAt, false, DateTimeOffset.UtcNow);
     }
 
-    public async Task<List<InvitationInfo>> GetInvitationsAsync()
+    public async Task<List<InvitationInfo>> GetInvitationsAsync(Guid organizationId)
     {
         var result = new List<InvitationInfo>(); await using var connection = new NpgsqlConnection(connectionString); await connection.OpenAsync();
-        await using var command = connection.CreateCommand(); command.CommandText = "select invitation_id,code_prefix,max_uses,used_count,expires_at,revoked,created_at from ares_invitation_codes order by created_at desc limit 200";
+        await using var command = connection.CreateCommand(); command.CommandText = "select invitation_id,code_prefix,max_uses,used_count,expires_at,revoked,created_at from ares_invitation_codes where organization_id=@organization order by created_at desc limit 200";
+        command.Parameters.AddWithValue("organization", organizationId);
         await using var reader = await command.ExecuteReaderAsync();
         while (await reader.ReadAsync()) result.Add(new(reader.GetGuid(0), reader.GetString(1), reader.GetInt32(2), reader.GetInt32(3), reader.GetFieldValue<DateTimeOffset>(4), reader.GetBoolean(5), reader.GetFieldValue<DateTimeOffset>(6)));
         return result;
     }
 
-    public async Task<Guid?> ConsumeInvitationAsync(byte[] codeHash)
+    public async Task<InvitationGrant?> ConsumeInvitationAsync(byte[] codeHash)
     {
         await using var connection = new NpgsqlConnection(connectionString); await connection.OpenAsync();
         await using var command = connection.CreateCommand(); command.CommandText = """
             update ares_invitation_codes set used_count=used_count+1
             where code_hash=@hash and not revoked and expires_at > now() and used_count < max_uses
-            returning invitation_id
+            returning invitation_id, organization_id, invited_role
             """;
-        command.Parameters.AddWithValue("hash", codeHash); object? value = await command.ExecuteScalarAsync(); return value is Guid id ? id : null;
+        command.Parameters.AddWithValue("hash", codeHash);
+        await using var reader = await command.ExecuteReaderAsync();
+        return await reader.ReadAsync() ? new InvitationGrant(reader.GetGuid(0), reader.GetGuid(1), reader.GetString(2)) : null;
     }
 
     public async Task RestoreInvitationUseAsync(Guid invitationId)
@@ -265,11 +312,11 @@ internal sealed class AresPersistence
         command.Parameters.AddWithValue("id", invitationId); await command.ExecuteNonQueryAsync();
     }
 
-    public async Task RevokeInvitationAsync(Guid invitationId)
+    public async Task RevokeInvitationAsync(Guid invitationId, Guid organizationId)
     {
         await using var connection = new NpgsqlConnection(connectionString); await connection.OpenAsync();
-        await using var command = connection.CreateCommand(); command.CommandText = "update ares_invitation_codes set revoked=true where invitation_id=@id";
-        command.Parameters.AddWithValue("id", invitationId); await command.ExecuteNonQueryAsync();
+        await using var command = connection.CreateCommand(); command.CommandText = "update ares_invitation_codes set revoked=true where invitation_id=@id and organization_id=@organization";
+        command.Parameters.AddWithValue("id", invitationId); command.Parameters.AddWithValue("organization", organizationId); await command.ExecuteNonQueryAsync();
     }
 
     public async Task<T?> LoadAsync<T>(string key)
@@ -305,6 +352,7 @@ internal sealed class AresPersistence
     }
 }
 
-internal sealed record AdminUser(Guid UserId, string Email, string DisplayName, string Role, bool Enabled);
+internal sealed record AdminUser(Guid UserId, Guid OrganizationId, string Email, string DisplayName, string Role, bool Enabled);
+internal sealed record InvitationGrant(Guid InvitationId, Guid OrganizationId, string InvitedRole);
 internal sealed record RegistrationRequestInfo(Guid UserId, string Email, string DisplayName, string Status, DateTimeOffset RequestedAt, DateTimeOffset? ReviewedAt);
 internal sealed record InvitationInfo(Guid InvitationId, string CodePrefix, int MaxUses, int UsedCount, DateTimeOffset ExpiresAt, bool Revoked, DateTimeOffset CreatedAt);

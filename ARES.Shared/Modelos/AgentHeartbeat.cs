@@ -16,6 +16,7 @@ public class AgentHeartbeat
 
 public sealed class AgentStatus : AgentHeartbeat
 {
+    public Guid OrganizationId { get; set; }
     public string NombrePersonalizado { get; set; } = "";
     public DateTimeOffset UltimaConexionUtc { get; set; }
     public bool EstaEnLinea { get; set; }
@@ -122,6 +123,7 @@ public sealed class RollbackScheduleRequest
 public sealed class AgentAuditEvent
 {
     public string Id { get; set; } = Guid.NewGuid().ToString("N");
+    public Guid OrganizationId { get; set; }
     public string AgentId { get; set; } = "";
     public string Equipo { get; set; } = "";
     public string Tipo { get; set; } = "";
@@ -142,6 +144,7 @@ public class ControlSessionHeartbeat
 
 public sealed class ControlSessionStatus : ControlSessionHeartbeat
 {
+    public Guid OrganizationId { get; set; }
     public DateTimeOffset UltimaConexionUtc { get; set; }
     public bool Activa { get; set; }
     public bool ActualizacionSolicitada { get; set; }

@@ -36,7 +36,7 @@ internal sealed class AresAuthService
         if (admin is null || !admin.Enabled) return null;
         string email = document.RootElement.TryGetProperty("email", out JsonElement item) ? item.GetString() ?? "" : "";
         await persistence.UpdateAdminEmailAsync(admin.UserId, email);
-        return new(admin.UserId, email, admin.DisplayName, admin.Role);
+        return new(admin.UserId, admin.OrganizationId, email, admin.DisplayName, admin.Role);
     }
 
     public async Task<Guid?> SignUpAsync(string email, string password, string displayName, string redirectUrl, CancellationToken cancellationToken)
@@ -83,7 +83,7 @@ internal sealed class AresAuthService
         if (admin is null || !admin.Enabled) return null;
         await persistence.UpdateAdminEmailAsync(admin.UserId, token.User.Email ?? "");
         return new(token.AccessToken, token.RefreshToken, token.ExpiresIn,
-            new(admin.UserId, token.User.Email ?? admin.Email, admin.DisplayName, admin.Role));
+            new(admin.UserId, admin.OrganizationId, token.User.Email ?? admin.Email, admin.DisplayName, admin.Role));
     }
 
     private HttpRequestMessage CreateRequest(HttpMethod method, string path)
@@ -106,7 +106,7 @@ internal sealed class AresAuthService
     private sealed class AuthUser { public string Id { get; set; } = ""; public string? Email { get; set; } }
 }
 
-internal sealed record AuthenticatedAdmin(Guid UserId, string Email, string DisplayName, string Role);
+internal sealed record AuthenticatedAdmin(Guid UserId, Guid OrganizationId, string Email, string DisplayName, string Role);
 internal sealed record AuthResult(string AccessToken, string RefreshToken, int ExpiresIn, AuthenticatedAdmin User);
 internal sealed record LoginRequest(string Email, string Password);
 internal sealed record RefreshRequest(string RefreshToken);
@@ -115,4 +115,4 @@ internal sealed record RecoverRequest(string Email);
 internal sealed record UpdatePasswordRequest(string AccessToken, string Password);
 internal sealed record ApproveRegistrationRequest(string Role);
 internal sealed record UpdateAdminRequest(string Role, bool Enabled);
-internal sealed record CreateInvitationRequest(int MaxUses, int DurationHours);
+internal sealed record CreateInvitationRequest(int MaxUses, int DurationHours, string Role = "Viewer");

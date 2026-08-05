@@ -675,12 +675,13 @@ namespace AdministracionEmpleados
                 invitationsPage.Controls.Add(inviteRoot);
                 createInvite.Click += async (_, _) =>
                 {
-                    using var form = new Form { Text = "Nueva invitación", Width = 420, Height = 280, StartPosition = FormStartPosition.CenterParent, FormBorderStyle = FormBorderStyle.FixedDialog };
+                    using var form = new Form { Text = "Nueva invitación", Width = 420, Height = 350, StartPosition = FormStartPosition.CenterParent, FormBorderStyle = FormBorderStyle.FixedDialog };
                     var uses = new NumericUpDown { Minimum = 1, Maximum = 1000, Value = 1, Width = 160 }; var hours = new NumericUpDown { Minimum = 1, Maximum = 720, Value = 48, Width = 160 };
+                    var role = new ComboBox { Width = 190, DropDownStyle = ComboBoxStyle.DropDownList }; role.Items.AddRange(["Administrator", "Supervisor", "Viewer"]); role.SelectedItem = "Viewer";
                     var create = new Button { Text = "Generar código", Width = 160, Height = 38 };
-                    var layout = new FlowLayoutPanel { Location = new Point(30, 25), Width = 340, Height = 210, FlowDirection = FlowDirection.TopDown, WrapContents = false, Controls = { new Label { Text = "Cantidad máxima de usos", AutoSize = true }, uses, new Label { Text = "Duración en horas", AutoSize = true }, hours, create } };
+                    var layout = new FlowLayoutPanel { Location = new Point(30, 25), Width = 340, Height = 280, FlowDirection = FlowDirection.TopDown, WrapContents = false, Controls = { new Label { Text = "Rol que recibirá el invitado", AutoSize = true }, role, new Label { Text = "Cantidad máxima de usos", AutoSize = true }, uses, new Label { Text = "Duración en horas", AutoSize = true }, hours, create } };
                     form.Controls.Add(layout);
-                    create.Click += async (_, _) => { CreatedInvitation result = await discoveryService.CrearInvitacionAsync((int)uses.Value, (int)hours.Value); Clipboard.SetText(result.Code); MessageBox.Show($"Código creado y copiado:\n\n{result.Code}\n\nSe mostrará completo solamente esta vez.", "ARES", MessageBoxButtons.OK, MessageBoxIcon.Information); form.Close(); await LoadAsync(); };
+                    create.Click += async (_, _) => { CreatedInvitation result = await discoveryService.CrearInvitacionAsync((int)uses.Value, (int)hours.Value, role.Text); Clipboard.SetText(result.Code); MessageBox.Show($"Código creado para el rol {role.Text} y copiado:\n\n{result.Code}\n\nSe mostrará completo solamente esta vez.", "ARES", MessageBoxButtons.OK, MessageBoxIcon.Information); form.Close(); await LoadAsync(); };
                     form.ShowDialog(dialog);
                 };
                 try

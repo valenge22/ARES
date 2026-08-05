@@ -322,7 +322,20 @@ app.MapGet("/api/account/mfa", async (HttpContext context, CancellationToken can
 });
 app.MapPost("/api/account/mfa/enroll", async (HttpContext context, CancellationToken cancellationToken) =>
 {
-    JsonElement? result = await authService.EnrollMfaAsync(BearerToken(context), cancellationToken);
+    string token = BearerToken(context);
+    JsonElement? current = await authService.ListMfaAsync(token, cancellationToken);
+    if (current.HasValue && current.Value.TryGetProperty("factors", out JsonElement factors) && factors.ValueKind == JsonValueKind.Array)
+    {
+        foreach (JsonElement factor in factors.EnumerateArray())
+        {
+            string status = factor.TryGetProperty("status", out JsonElement statusValue) ? statusValue.GetString() ?? "" : "";
+            string type = factor.TryGetProperty("factor_type", out JsonElement typeValue) ? typeValue.GetString() ?? "" : "";
+            string factorId = factor.TryGetProperty("id", out JsonElement factorIdValue) ? factorIdValue.GetString() ?? "" : "";
+            if (type == "totp" && status != "verified" && !string.IsNullOrWhiteSpace(factorId))
+                await authService.UnenrollMfaAsync(token, factorId, cancellationToken);
+        }
+    }
+    JsonElement? result = await authService.EnrollMfaAsync(token, cancellationToken);
     if (!result.HasValue) return Results.BadRequest(new { error = "No se pudo iniciar la configuración 2FA." });
     JsonElement value = result.Value;
     string id = value.TryGetProperty("id", out JsonElement idValue) ? idValue.GetString() ?? "" : "";

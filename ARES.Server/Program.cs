@@ -90,6 +90,7 @@ app.Use(async (context, next) =>
     bool publicPath = context.Request.Path.Equals("/") ||
         context.Request.Path.Equals("/portal") ||
         context.Request.Path.Equals("/admin-ares") ||
+        context.Request.Path.Equals("/admin-mfa.js") ||
         context.Request.Path.StartsWithSegments("/health") ||
         context.Request.Path.StartsWithSegments("/solicitar") ||
         context.Request.Path.StartsWithSegments("/auth") ||

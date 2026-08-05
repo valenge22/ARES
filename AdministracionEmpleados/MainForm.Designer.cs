@@ -56,42 +56,42 @@ namespace AdministracionEmpleados
 
             SuspendLayout();
 
-            pnlMenu.BackColor = Color.FromArgb(15, 23, 42);
+            pnlMenu.BackColor = Color.FromArgb(52, 58, 64);
             pnlMenu.Dock = DockStyle.Left;
-            pnlMenu.Width = 230;
+            pnlMenu.Width = 205;
             pnlMenu.Controls.Add(flpNavegacion);
             pnlMenu.Controls.Add(pnlMarca);
 
             pnlMarca.Dock = DockStyle.Top;
-            pnlMarca.Height = 104;
-            pnlMarca.BackColor = Color.FromArgb(15, 23, 42);
+            pnlMarca.Height = 76;
+            pnlMarca.BackColor = Color.White;
             pnlMarca.Controls.Add(lblEscudo);
             pnlMarca.Controls.Add(lblARES);
             pnlMarca.Controls.Add(lblVersion);
 
             lblEscudo.AutoSize = true;
-            lblEscudo.Font = new Font("Segoe UI Emoji", 25F);
-            lblEscudo.ForeColor = Color.FromArgb(56, 189, 248);
-            lblEscudo.Location = new Point(20, 25);
+            lblEscudo.Font = new Font("Segoe UI Emoji", 21F);
+            lblEscudo.ForeColor = Color.FromArgb(196, 54, 54);
+            lblEscudo.Location = new Point(17, 17);
             lblEscudo.Text = "🛡";
 
             lblARES.AutoSize = true;
-            lblARES.Font = new Font("Segoe UI", 22F, FontStyle.Bold);
-            lblARES.ForeColor = Color.White;
-            lblARES.Location = new Point(70, 22);
+            lblARES.Font = new Font("Segoe UI", 19F, FontStyle.Bold);
+            lblARES.ForeColor = Color.FromArgb(38, 45, 52);
+            lblARES.Location = new Point(59, 14);
             lblARES.Text = "ARES";
 
             lblVersion.AutoSize = true;
             lblVersion.Font = new Font("Segoe UI", 9F);
-            lblVersion.ForeColor = Color.FromArgb(148, 163, 184);
-            lblVersion.Location = new Point(73, 64);
-            lblVersion.Text = "CONTROL CENTER  v1.0";
+            lblVersion.ForeColor = Color.FromArgb(138, 47, 47);
+            lblVersion.Location = new Point(61, 45);
+            lblVersion.Text = "CENTRO DE CONTROL";
 
             flpNavegacion.Dock = DockStyle.Fill;
             flpNavegacion.FlowDirection = FlowDirection.TopDown;
             flpNavegacion.WrapContents = false;
-            flpNavegacion.Padding = new Padding(12, 18, 12, 0);
-            flpNavegacion.BackColor = Color.FromArgb(15, 23, 42);
+            flpNavegacion.Padding = new Padding(0, 10, 0, 0);
+            flpNavegacion.BackColor = Color.FromArgb(52, 58, 64);
             flpNavegacion.Controls.AddRange(new Control[] {
                 btnEmpleados, btnEquipos, btnMonitor, btnSeguridad,
                 btnPantallas, btnConfiguracion
@@ -99,50 +99,50 @@ namespace AdministracionEmpleados
 
             pnlCabecera.BackColor = Color.White;
             pnlCabecera.Dock = DockStyle.Top;
-            pnlCabecera.Height = 104;
-            pnlCabecera.Padding = new Padding(30, 0, 30, 0);
+            pnlCabecera.Height = 76;
+            pnlCabecera.Padding = new Padding(22, 0, 22, 0);
             pnlCabecera.Controls.Add(lblTituloSeccion);
             pnlCabecera.Controls.Add(lblSubtitulo);
             pnlCabecera.Controls.Add(pnlEstadoConexion);
 
             lblTituloSeccion.AutoSize = true;
-            lblTituloSeccion.Font = new Font("Segoe UI", 20F, FontStyle.Bold);
-            lblTituloSeccion.ForeColor = Color.FromArgb(15, 23, 42);
-            lblTituloSeccion.Location = new Point(30, 20);
+            lblTituloSeccion.Font = new Font("Segoe UI", 15F, FontStyle.Regular);
+            lblTituloSeccion.ForeColor = Color.FromArgb(48, 55, 62);
+            lblTituloSeccion.Location = new Point(22, 13);
             lblTituloSeccion.Text = "Equipos";
 
             lblSubtitulo.AutoSize = true;
-            lblSubtitulo.Font = new Font("Segoe UI", 10F);
-            lblSubtitulo.ForeColor = Color.FromArgb(100, 116, 139);
-            lblSubtitulo.Location = new Point(33, 62);
+            lblSubtitulo.Font = new Font("Segoe UI", 8.5F);
+            lblSubtitulo.ForeColor = Color.FromArgb(117, 125, 133);
+            lblSubtitulo.Location = new Point(24, 44);
             lblSubtitulo.Text = "Administrá los dispositivos conectados a ARES";
 
             pnlEstadoConexion.Anchor = AnchorStyles.Top | AnchorStyles.Right;
             pnlEstadoConexion.BackColor = Color.FromArgb(240, 253, 244);
-            pnlEstadoConexion.Location = new Point(735, 29);
-            pnlEstadoConexion.Size = new Size(205, 44);
+            pnlEstadoConexion.Location = new Point(750, 17);
+            pnlEstadoConexion.Size = new Size(190, 40);
             pnlEstadoConexion.Controls.Add(lblPuntoConexion);
             pnlEstadoConexion.Controls.Add(lblConexion);
 
             lblPuntoConexion.AutoSize = true;
             lblPuntoConexion.Font = new Font("Segoe UI", 12F, FontStyle.Bold);
             lblPuntoConexion.ForeColor = Color.FromArgb(34, 197, 94);
-            lblPuntoConexion.Location = new Point(14, 10);
+            lblPuntoConexion.Location = new Point(12, 8);
             lblPuntoConexion.Text = "●";
 
             lblConexion.AutoSize = true;
             lblConexion.Font = new Font("Segoe UI", 9.5F, FontStyle.Bold);
             lblConexion.ForeColor = Color.FromArgb(22, 101, 52);
-            lblConexion.Location = new Point(39, 13);
+            lblConexion.Location = new Point(36, 11);
             lblConexion.Text = "Comprobando conexión";
 
-            pnlContenido.BackColor = Color.FromArgb(241, 245, 249);
+            pnlContenido.BackColor = Color.FromArgb(235, 237, 239);
             pnlContenido.Dock = DockStyle.Fill;
-            pnlContenido.Padding = new Padding(30);
+            pnlContenido.Padding = new Padding(18);
 
             AutoScaleDimensions = new SizeF(7F, 15F);
             AutoScaleMode = AutoScaleMode.Font;
-            BackColor = Color.FromArgb(241, 245, 249);
+            BackColor = Color.FromArgb(235, 237, 239);
             ClientSize = new Size(1200, 720);
             MinimumSize = new Size(1000, 620);
             Controls.Add(pnlContenido);
@@ -160,15 +160,15 @@ namespace AdministracionEmpleados
         {
             return new Button
             {
-                BackColor = Color.FromArgb(15, 23, 42),
+                BackColor = Color.FromArgb(52, 58, 64),
                 Cursor = Cursors.Hand,
                 FlatStyle = FlatStyle.Flat,
-                Font = new Font("Segoe UI", 10.5F),
-                ForeColor = Color.FromArgb(203, 213, 225),
-                Height = 50,
-                Margin = new Padding(0, 3, 0, 3),
-                Padding = new Padding(8, 0, 0, 0),
-                Size = new Size(206, 50),
+                Font = new Font("Segoe UI", 9.2F),
+                ForeColor = Color.FromArgb(238, 238, 238),
+                Height = 42,
+                Margin = new Padding(0),
+                Padding = new Padding(10, 0, 0, 0),
+                Size = new Size(205, 42),
                 Text = texto,
                 TextAlign = ContentAlignment.MiddleLeft,
                 UseVisualStyleBackColor = false

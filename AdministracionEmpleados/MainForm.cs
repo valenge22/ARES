@@ -137,12 +137,12 @@ namespace AdministracionEmpleados
         {
             if (botonActivo != null)
             {
-                botonActivo.BackColor = Color.FromArgb(15, 23, 42);
-                botonActivo.ForeColor = Color.FromArgb(203, 213, 225);
+                botonActivo.BackColor = Color.FromArgb(52, 58, 64);
+                botonActivo.ForeColor = Color.FromArgb(238, 238, 238);
             }
 
             botonActivo = activo;
-            activo.BackColor = Color.FromArgb(30, 64, 175);
+            activo.BackColor = Color.FromArgb(190, 55, 55);
             activo.ForeColor = Color.White;
         }
 
@@ -255,7 +255,7 @@ namespace AdministracionEmpleados
                 MultiSelect = false,
                 ReadOnly = true,
                 RowHeadersVisible = false,
-                RowTemplate = { Height = 55 },
+                RowTemplate = { Height = 43 },
                 SelectionMode = DataGridViewSelectionMode.FullRowSelect
             };
 
@@ -276,6 +276,7 @@ namespace AdministracionEmpleados
                 SelectionBackColor = Color.FromArgb(239, 246, 255),
                 SelectionForeColor = Color.FromArgb(30, 41, 59)
             };
+            tabla.AlternatingRowsDefaultCellStyle = new DataGridViewCellStyle { BackColor = Color.FromArgb(245, 245, 245) };
 
             tabla.Columns.Add(new DataGridViewTextBoxColumn { Name = "Equipo", HeaderText = "EQUIPO", FillWeight = 120 });
             tabla.Columns.Add(new DataGridViewTextBoxColumn { Name = "Estado", HeaderText = "ESTADO", FillWeight = 95 });
@@ -790,7 +791,7 @@ namespace AdministracionEmpleados
 
         private static Panel CrearTarjeta() => new()
         {
-            BackColor = Color.White,
+            BackColor = Color.FromArgb(222, 225, 228),
             Dock = DockStyle.Fill,
             Padding = new Padding(1),
             Margin = new Padding(0)
@@ -807,17 +808,18 @@ namespace AdministracionEmpleados
 
         private static Panel CrearEncabezadoTarjeta(string titulo, string detalle)
         {
-            var panel = new Panel { Dock = DockStyle.Top, Height = 78, BackColor = Color.White, Padding = new Padding(22, 13, 10, 0) };
-            panel.Controls.Add(new Label { Text = detalle, AutoSize = true, Location = new Point(24, 45), ForeColor = Color.FromArgb(100, 116, 139), Font = new Font("Segoe UI", 9F) });
-            panel.Controls.Add(new Label { Text = titulo, AutoSize = true, Location = new Point(22, 14), ForeColor = Color.FromArgb(30, 41, 59), Font = new Font("Segoe UI", 13F, FontStyle.Bold) });
+            var panel = new Panel { Dock = DockStyle.Top, Height = 64, BackColor = Color.FromArgb(58, 113, 177), Padding = new Padding(18, 9, 10, 0) };
+            panel.Controls.Add(new Label { Text = detalle, AutoSize = true, Location = new Point(20, 37), ForeColor = Color.FromArgb(225, 235, 247), Font = new Font("Segoe UI", 8F) });
+            panel.Controls.Add(new Label { Text = titulo, AutoSize = true, Location = new Point(18, 10), ForeColor = Color.White, Font = new Font("Segoe UI", 11F, FontStyle.Bold) });
             return panel;
         }
 
         private static DataGridView CrearListaSimple(string[] columnas, List<string[]> filas)
         {
-            var tabla = new DataGridView { Dock = DockStyle.Fill, ReadOnly = true, AllowUserToAddRows = false, RowHeadersVisible = false, AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill, BackgroundColor = Color.White, BorderStyle = BorderStyle.None, CellBorderStyle = DataGridViewCellBorderStyle.SingleHorizontal, ColumnHeadersHeight = 44, RowTemplate = { Height = 50 }, EnableHeadersVisualStyles = false };
+            var tabla = new DataGridView { Dock = DockStyle.Fill, ReadOnly = true, AllowUserToAddRows = false, RowHeadersVisible = false, AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill, BackgroundColor = Color.White, BorderStyle = BorderStyle.None, CellBorderStyle = DataGridViewCellBorderStyle.SingleHorizontal, ColumnHeadersHeight = 38, RowTemplate = { Height = 40 }, EnableHeadersVisualStyles = false };
             tabla.ColumnHeadersDefaultCellStyle = new DataGridViewCellStyle { BackColor = Color.FromArgb(248, 250, 252), ForeColor = Color.FromArgb(71, 85, 105), Font = new Font("Segoe UI", 9F, FontStyle.Bold) };
             tabla.DefaultCellStyle = new DataGridViewCellStyle { ForeColor = Color.FromArgb(30, 41, 59), SelectionBackColor = Color.FromArgb(239, 246, 255), SelectionForeColor = Color.FromArgb(30, 41, 59), Padding = new Padding(10, 0, 0, 0) };
+            tabla.AlternatingRowsDefaultCellStyle = new DataGridViewCellStyle { BackColor = Color.FromArgb(243, 243, 243) };
             foreach (string columna in columnas) tabla.Columns.Add(columna, columna);
             foreach (string[] fila in filas) tabla.Rows.Add(fila);
             return tabla;

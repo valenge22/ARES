@@ -18,7 +18,7 @@ namespace AdministracionEmpleados
         }
         private readonly EmpleadoService empleadoService = new();
         private readonly AgenteDiscoveryService discoveryService = new();
-        private readonly AuditCacheService auditCacheService = new();
+        private readonly AuditCacheService auditCacheService = new(AresControlAuth.Client.User?.OrganizationId ?? Guid.Empty);
         private readonly System.Windows.Forms.Timer temporizadorDescubrimiento = new() { Interval = 8000 };
         private readonly Dictionary<Button, (string Titulo, string Subtitulo)> secciones;
         private Button? botonActivo;

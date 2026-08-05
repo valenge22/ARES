@@ -7,6 +7,6 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <ApplicationIcon>..\Branding\ares.ico</ApplicationIcon>
     <AssemblyName>ARES.Agent.Setup</AssemblyName>
-    <Version>1.7.1</Version>
+    <Version>1.7.2</Version>
   </PropertyGroup>
 </Project>

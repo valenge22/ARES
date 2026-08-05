@@ -3,6 +3,7 @@ using System.Net.Http.Json;
 using System.Security.Cryptography;
 using System.Security.Principal;
 using System.Text;
+using System.Text.Json;
 using Microsoft.Win32;
 
 namespace ARES.Agent.Setup;
@@ -42,6 +43,8 @@ internal sealed class SetupForm : Form
     private readonly Button install = new() { Text = "Instalar ARES Agent", Width = 180, Height = 42, BackColor = Color.FromArgb(37, 99, 235), ForeColor = Color.White, FlatStyle = FlatStyle.Flat };
     private readonly Button cancel = new() { Text = "Cancelar", Width = 100, Height = 42, DialogResult = DialogResult.Cancel };
     private bool busy;
+    private bool upgradeMode;
+    private string existingCredential = "";
     public bool Installed { get; private set; }
 
     public SetupForm(string packageDirectory)
@@ -102,6 +105,25 @@ internal sealed class SetupForm : Form
                 : "La cuenta actual conservará sus permisos administrativos. ARES creará una cuenta estándar nueva para el empleado.";
         };
         FormClosing += (_, e) => { if (busy && !Installed) e.Cancel = true; };
+        DetectExistingInstallation();
+    }
+
+    private void DetectExistingInstallation()
+    {
+        try
+        {
+            string path = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "ARES Agent", "appsettings.json");
+            if (!File.Exists(path)) return;
+            InstalledAgentConfig? current = JsonSerializer.Deserialize<InstalledAgentConfig>(File.ReadAllText(path), new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+            if (current is null || string.IsNullOrWhiteSpace(current.DeviceCredential) || string.IsNullOrWhiteSpace(current.ManagedUser)) return;
+            upgradeMode = true; existingCredential = current.DeviceCredential; employee.Text = current.ManagedUser;
+            linkCode.Text = "Credencial existente protegida"; linkCode.Enabled = false; employee.Enabled = false;
+            useExisting.Checked = true; useExisting.Enabled = false;
+            employeePassword.Enabled = employeeConfirmation.Enabled = adminPassword.Enabled = adminConfirmation.Enabled = false;
+            install.Text = "Actualizar ARES Agent";
+            status.Text = "Instalación existente detectada. No es necesario volver a vincular el equipo.";
+        }
+        catch { upgradeMode = false; existingCredential = ""; }
     }
 
     private async Task InstallAsync()
@@ -126,14 +148,22 @@ internal sealed class SetupForm : Form
             start.ArgumentList.Add("-ServerUrl"); start.ArgumentList.Add(ServerUrl);
             start.ArgumentList.Add("-ManagedUser"); start.ArgumentList.Add(employee.Text.Trim());
             start.ArgumentList.Add("-InstallerAdminUser"); start.ArgumentList.Add(Environment.UserName);
-            start.ArgumentList.Add("-ProvisionStandardUser"); start.ArgumentList.Add("-NonInteractiveProvisioning");
-            if (useExisting.Checked) start.ArgumentList.Add("-UseExistingStandardUser");
+            if (!upgradeMode)
+            {
+                start.ArgumentList.Add("-ProvisionStandardUser");
+                if (useExisting.Checked) start.ArgumentList.Add("-UseExistingStandardUser");
+            }
+            start.ArgumentList.Add("-NonInteractiveProvisioning");
             start.ArgumentList.Add("-LogPath"); start.ArgumentList.Add(Path.Combine(Path.GetTempPath(), "ARES-Agent-Install.log"));
-            if (!useExisting.Checked)
+            if (!upgradeMode && !useExisting.Checked)
                 start.Environment["ARES_SETUP_EMPLOYEE_PASSWORD"] = employeePassword.Text;
-            start.Environment["ARES_SETUP_ADMIN_PASSWORD"] = adminPassword.Text;
-            enrollment = await EnrollAsync();
-            start.Environment["ARES_SETUP_DEVICE_CREDENTIAL"] = enrollment.Credential;
+            if (!upgradeMode) start.Environment["ARES_SETUP_ADMIN_PASSWORD"] = adminPassword.Text;
+            if (upgradeMode) start.Environment["ARES_SETUP_DEVICE_CREDENTIAL"] = existingCredential;
+            else
+            {
+                enrollment = await EnrollAsync();
+                start.Environment["ARES_SETUP_DEVICE_CREDENTIAL"] = enrollment.Credential;
+            }
 
             using Process process = Process.Start(start) ?? throw new InvalidOperationException("No se pudo iniciar el configurador.");
             Task<string> errorTask = process.StandardError.ReadToEndAsync();
@@ -147,7 +177,7 @@ internal sealed class SetupForm : Form
                 string detail = File.Exists(logPath) ? File.ReadAllText(logPath) : error;
                 throw new InvalidOperationException(string.IsNullOrWhiteSpace(detail) ? "La instalación no pudo completarse." : detail);
             }
-            MessageBox.Show("ARES Agent se instaló correctamente. Cerrá la sesión administradora e ingresá con la nueva cuenta del empleado.", "ARES", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            MessageBox.Show(upgradeMode ? "ARES Agent se actualizó correctamente. No fue necesario volver a vincular el equipo." : "ARES Agent se instaló correctamente. Cerrá la sesión administradora e ingresá con la nueva cuenta del empleado.", "ARES", MessageBoxButtons.OK, MessageBoxIcon.Information);
             Installed = true;
             SetBusy(false, "Instalación completada correctamente.");
             DialogResult = DialogResult.OK;
@@ -162,6 +192,7 @@ internal sealed class SetupForm : Form
 
     private string? ValidateInput()
     {
+        if (upgradeMode) return null;
         if (!linkCode.Text.Trim().StartsWith("ARES-PC-", StringComparison.OrdinalIgnoreCase)) return "Ingresá un código de vinculación ARES válido.";
         string name = employee.Text.Trim();
         if (name.Length is < 1 or > 20 || name.IndexOfAny("\\/[]:;|=,+*?<>@\"".ToCharArray()) >= 0 || name.EndsWith('.')) return "El nombre del empleado no es válido o supera 20 caracteres.";
@@ -238,4 +269,10 @@ internal sealed class EnrollmentResponse
     public string Credential { get; set; } = "";
     public Guid OrganizationId { get; set; }
     public string Group { get; set; } = "General";
+}
+
+internal sealed class InstalledAgentConfig
+{
+    public string DeviceCredential { get; set; } = "";
+    public string ManagedUser { get; set; } = "";
 }

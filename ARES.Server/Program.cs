@@ -65,9 +65,9 @@ foreach (Guid organizationId in await persistence.GetOrganizationIdsAsync())
     if (policies.Count == 0) policies.Add(new GroupPolicy { Grupo = "General" });
     policiesByOrganization[organizationId] = policies;
 }
-string latestAgentVersion = builder.Configuration["ARES_LATEST_AGENT_VERSION"] ?? "1.7.1";
+string latestAgentVersion = builder.Configuration["ARES_LATEST_AGENT_VERSION"] ?? "1.7.2";
 string agentUpdateUrl = builder.Configuration["ARES_AGENT_UPDATE_URL"]
-    ?? "https://github.com/valenge22/ARES/releases/download/v1.7.1/ARES-Agent-Remoto-Windows-x64.zip";
+    ?? "https://github.com/valenge22/ARES/releases/download/v1.7.2/ARES-Agent-Remoto-Windows-x64.zip";
 if (File.Exists(updateVersionPath)) latestAgentVersion = File.ReadAllText(updateVersionPath).Trim();
 foreach (AgentStatus agent in await LoadStateAsync("agents", dataPath, new List<AgentStatus>()))
 {

@@ -18,7 +18,11 @@ public sealed class AgenteDiscoveryService
     public async Task<OrganizationSetupInfo?> ObtenerConfiguracionInicialAsync(CancellationToken cancelacion = default)
     {
         using HttpClient client = CrearCliente();
-        return await client.GetFromJsonAsync<OrganizationSetupInfo>($"{AresSettings.Cargar().ServerUrl.TrimEnd('/')}/api/onboarding", cancelacion);
+        using HttpResponseMessage response = await client.GetAsync($"{AresSettings.Cargar().ServerUrl.TrimEnd('/')}/api/onboarding", cancelacion);
+        if (response.StatusCode == System.Net.HttpStatusCode.NotFound || response.Content.Headers.ContentLength == 0) return null;
+        response.EnsureSuccessStatusCode();
+        string json = await response.Content.ReadAsStringAsync(cancelacion);
+        return string.IsNullOrWhiteSpace(json) ? null : JsonSerializer.Deserialize<OrganizationSetupInfo>(json, new JsonSerializerOptions(JsonSerializerDefaults.Web));
     }
     public async Task CompletarConfiguracionInicialAsync(CancellationToken cancelacion = default)
     {

@@ -16,8 +16,11 @@ internal sealed class AresApiClient
 
     public async Task<OrganizationSetupInfo?> OrganizationSetupAsync()
     {
-        using var request = Request(HttpMethod.Get, "/api/onboarding"); using var response = await http.SendAsync(request); response.EnsureSuccessStatusCode();
-        return await response.Content.ReadFromJsonAsync<OrganizationSetupInfo>();
+        using var request = Request(HttpMethod.Get, "/api/onboarding"); using var response = await http.SendAsync(request);
+        if (response.StatusCode == System.Net.HttpStatusCode.NotFound || response.Content.Headers.ContentLength == 0) return null;
+        response.EnsureSuccessStatusCode();
+        string json = await response.Content.ReadAsStringAsync();
+        return string.IsNullOrWhiteSpace(json) ? null : System.Text.Json.JsonSerializer.Deserialize<OrganizationSetupInfo>(json, new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web));
     }
     public async Task CompleteOrganizationSetupAsync()
     {

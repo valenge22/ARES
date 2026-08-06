@@ -25,7 +25,13 @@ internal sealed class AresPersistence
         value = value.Trim();
         if (!value.StartsWith("postgres://", StringComparison.OrdinalIgnoreCase) &&
             !value.StartsWith("postgresql://", StringComparison.OrdinalIgnoreCase))
-            return value;
+        {
+            var configuredBuilder = new NpgsqlConnectionStringBuilder(value)
+            {
+                GssEncryptionMode = GssEncryptionMode.Disable
+            };
+            return configuredBuilder.ConnectionString;
+        }
 
         var uri = new Uri(value);
         string[] userInfo = uri.UserInfo.Split(':', 2);
@@ -40,6 +46,7 @@ internal sealed class AresPersistence
             Username = Uri.UnescapeDataString(userInfo[0]),
             Password = Uri.UnescapeDataString(userInfo[1]),
             SslMode = SslMode.Require,
+            GssEncryptionMode = GssEncryptionMode.Disable,
             Pooling = true
         }.ConnectionString;
     }

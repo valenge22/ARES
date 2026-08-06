@@ -1396,7 +1396,7 @@ async Task<BillingSubscription> ReconcileBillingAsync(BillingSubscription stored
 
     MercadoPagoAuthorizedPayment? payment = await provider.FindLatestAuthorizedPaymentAsync(remote.Id, cancellationToken);
     bool approved = payment?.PaymentStatus == "approved";
-    DateTimeOffset? paidUntil = approved ? (payment?.DebitDate ?? DateTimeOffset.UtcNow).AddMonths(1) : stored.PaidUntil;
+    DateTimeOffset? paidUntil = approved ? (payment?.DebitDate ?? DateTimeOffset.UtcNow).AddMonths(1).ToUniversalTime() : stored.PaidUntil;
     if (cancellationRequested) await provider.CancelSubscriptionAsync(remote.Id, cancellationToken);
     var updated = stored with
     {
@@ -1425,7 +1425,7 @@ async Task<BillingSubscription> ApplyAuthorizedPaymentAsync(BillingSubscription 
 {
     bool cancellationRequested = stored.Status is "cancelled" or "canceled";
     DateTimeOffset? paidUntil = payment.PaymentStatus == "approved"
-        ? (payment.DebitDate ?? DateTimeOffset.UtcNow).AddMonths(1)
+        ? (payment.DebitDate ?? DateTimeOffset.UtcNow).AddMonths(1).ToUniversalTime()
         : stored.PaidUntil;
     if (cancellationRequested) await provider.CancelSubscriptionAsync(remote.Id, cancellationToken);
     if (!string.IsNullOrWhiteSpace(remote.PlanId)) await provider.CancelSubscriptionOrPlanAsync(remote.PlanId, cancellationToken);

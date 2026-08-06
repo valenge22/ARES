@@ -306,7 +306,10 @@ internal sealed class AresPersistence
         command.Parameters.AddWithValue("users", subscription.AdditionalPanelUsers); command.Parameters.AddWithValue("amount", subscription.AmountArs);
         command.Parameters.AddWithValue("status", subscription.Status);
         command.Parameters.Add(new NpgsqlParameter("payment", NpgsqlDbType.Varchar) { Value = string.IsNullOrWhiteSpace(subscription.LastPaymentStatus) ? DBNull.Value : subscription.LastPaymentStatus });
-        command.Parameters.Add(new NpgsqlParameter("paidUntil", NpgsqlDbType.TimestampTz) { Value = subscription.PaidUntil.HasValue ? subscription.PaidUntil.Value : DBNull.Value });
+        command.Parameters.Add(new NpgsqlParameter("paidUntil", NpgsqlDbType.TimestampTz)
+        {
+            Value = subscription.PaidUntil.HasValue ? subscription.PaidUntil.Value.ToUniversalTime() : DBNull.Value
+        });
         await command.ExecuteNonQueryAsync();
     }
 

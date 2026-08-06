@@ -255,8 +255,9 @@ app.MapPost("/api/billing/checkout", async (BillingCheckoutRequest request, Http
     if (!IsOwner(context)) return Results.Forbid();
     if (!mercadoPago.IsConfigured) return Results.BadRequest(new { error = "Mercado Pago todavía no está configurado." });
     string plan = NormalizePlan(request.Plan); if (plan is "" or "Trial") return Results.BadRequest(new { error = "Elegí un plan pago válido." });
-    string payerEmail = request.PayerEmail?.Trim() ?? "";
-    if (payerEmail.Length is < 5 or > 320 || !payerEmail.Contains('@')) return Results.BadRequest(new { error = "Ingresá el correo de la cuenta compradora de Mercado Pago." });
+    string payerEmail = CurrentAdmin(context).Email.Trim();
+    if (payerEmail.Length is < 5 or > 320 || !payerEmail.Contains('@'))
+        return Results.BadRequest(new { error = "Tu cuenta ARES no tiene un correo válido para iniciar el pago." });
     if (request.AdditionalDevices is < 0 or > 100000 || request.AdditionalPanelUsers is < 0 or > 10000)
         return Results.BadRequest(new { error = "Los adicionales no son válidos." });
     BillingSubscription? existing = await persistence.GetBillingSubscriptionAsync(CurrentOrganization(context));

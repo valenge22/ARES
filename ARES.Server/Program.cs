@@ -302,17 +302,29 @@ app.MapPost("/api/billing/reconcile-payment", async (BillingPaymentReconcileRequ
     string paymentId = request.PaymentId?.Trim() ?? "";
     if (paymentId.Length is < 6 or > 30 || paymentId.Any(x => !char.IsDigit(x)))
         return Results.BadRequest(new { error = "El número de operación no es válido." });
-    MercadoPagoAuthorizedPayment? payment = await mercadoPago.FindAuthorizedPaymentByPaymentIdAsync(paymentId, cancellationToken);
-    if (payment is null || payment.PaymentStatus != "approved")
-        return Results.BadRequest(new { error = "Mercado Pago no devolvió una factura aprobada para esa operación." });
-    MercadoPagoSubscription? remote = await mercadoPago.GetSubscriptionAsync(payment.SubscriptionId, cancellationToken);
-    BillingSubscription? stored = await persistence.GetBillingSubscriptionAsync(CurrentOrganization(context));
-    if (remote is null || stored is null ||
-        (remote.Id != stored.ProviderSubscriptionId && remote.PlanId != stored.ProviderSubscriptionId &&
-         (!Guid.TryParse(remote.ExternalReference, out Guid reference) || reference != stored.OrganizationId)))
-        return Results.BadRequest(new { error = "La operación no pertenece a esta organización ARES." });
-    BillingSubscription updated = await ApplyAuthorizedPaymentAsync(stored, remote, payment, mercadoPago, persistence, cancellationToken);
-    return Results.Ok(new { reconciled = true, subscription = updated });
+    string stage = "consultar el pago";
+    try
+    {
+        MercadoPagoAuthorizedPayment? payment = await mercadoPago.FindAuthorizedPaymentByPaymentIdAsync(paymentId, cancellationToken);
+        if (payment is null || payment.PaymentStatus != "approved")
+            return Results.BadRequest(new { error = "Mercado Pago no devolvió una factura aprobada para esa operación." });
+        stage = "consultar la suscripción";
+        MercadoPagoSubscription? remote = await mercadoPago.GetSubscriptionAsync(payment.SubscriptionId, cancellationToken);
+        stage = "validar la organización";
+        BillingSubscription? stored = await persistence.GetBillingSubscriptionAsync(CurrentOrganization(context));
+        if (remote is null || stored is null ||
+            (remote.Id != stored.ProviderSubscriptionId && remote.PlanId != stored.ProviderSubscriptionId &&
+             (!Guid.TryParse(remote.ExternalReference, out Guid reference) || reference != stored.OrganizationId)))
+            return Results.BadRequest(new { error = "La operación no pertenece a esta organización ARES." });
+        stage = "guardar la acreditación";
+        BillingSubscription updated = await ApplyAuthorizedPaymentAsync(stored, remote, payment, mercadoPago, persistence, cancellationToken);
+        return Results.Ok(new { reconciled = true, subscription = updated });
+    }
+    catch (Exception exception)
+    {
+        Console.Error.WriteLine($"Error al reconciliar pago {paymentId} durante '{stage}': {exception}");
+        return Results.BadRequest(new { error = $"No se pudo {stage}: {exception.GetType().Name}." });
+    }
 });
 
 app.MapPost("/api/billing/mercadopago/webhook", async (HttpContext context, JsonElement payload, CancellationToken cancellationToken) =>

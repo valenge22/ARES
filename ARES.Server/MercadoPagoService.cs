@@ -22,10 +22,10 @@ internal sealed class MercadoPagoService
         if (!string.IsNullOrWhiteSpace(accessToken)) http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
     }
 
-    public async Task<MercadoPagoSubscription?> CreateSubscriptionAsync(Guid organizationId, string email, string description,
+    public async Task<MercadoPagoCreateResult> CreateSubscriptionAsync(Guid organizationId, string email, string description,
         decimal amountArs, string returnUrl, string notificationUrl, CancellationToken cancellationToken)
     {
-        if (!IsConfigured) return null;
+        if (!IsConfigured) return new(null, "Mercado Pago no está configurado.");
         using HttpResponseMessage response = await http.PostAsJsonAsync("/preapproval", new
         {
             reason = description,
@@ -36,7 +36,9 @@ internal sealed class MercadoPagoService
             auto_recurring = new { frequency = 1, frequency_type = "months", transaction_amount = decimal.Round(amountArs, 2), currency_id = "ARS" },
             status = "pending"
         }, cancellationToken);
-        return await ReadSubscriptionAsync(response, cancellationToken);
+        if (response.IsSuccessStatusCode)
+            return new(await ReadSubscriptionAsync(response, cancellationToken), "");
+        return new(null, await ReadApiErrorAsync(response, cancellationToken));
     }
 
     public async Task<MercadoPagoSubscription?> GetSubscriptionAsync(string id, CancellationToken cancellationToken)
@@ -84,8 +86,37 @@ internal sealed class MercadoPagoService
             root.TryGetProperty("external_reference", out JsonElement reference) ? reference.GetString() ?? "" : "",
             root.TryGetProperty("init_point", out JsonElement point) ? point.GetString() ?? "" : "", amount);
     }
+
+    private static async Task<string> ReadApiErrorAsync(HttpResponseMessage response, CancellationToken cancellationToken)
+    {
+        string fallback = $"Mercado Pago rechazó la solicitud ({(int)response.StatusCode}).";
+        try
+        {
+            using JsonDocument document = JsonDocument.Parse(await response.Content.ReadAsStringAsync(cancellationToken));
+            JsonElement root = document.RootElement;
+            string message = root.TryGetProperty("message", out JsonElement messageValue) ? messageValue.GetString() ?? "" : "";
+            string code = root.TryGetProperty("error", out JsonElement errorValue) ? errorValue.ToString() : "";
+            if (root.TryGetProperty("cause", out JsonElement causes) && causes.ValueKind == JsonValueKind.Array)
+            {
+                string cause = string.Join("; ", causes.EnumerateArray().Select(item =>
+                {
+                    string itemCode = item.TryGetProperty("code", out JsonElement c) ? c.ToString() : "";
+                    string description = item.TryGetProperty("description", out JsonElement d) ? d.GetString() ?? "" : "";
+                    return string.Join(": ", new[] { itemCode, description }.Where(x => !string.IsNullOrWhiteSpace(x)));
+                }).Where(x => !string.IsNullOrWhiteSpace(x)));
+                if (!string.IsNullOrWhiteSpace(cause)) message = string.Join(" — ", new[] { message, cause }.Where(x => !string.IsNullOrWhiteSpace(x)));
+            }
+            string detail = string.Join(": ", new[] { code, message }.Where(x => !string.IsNullOrWhiteSpace(x)));
+            return string.IsNullOrWhiteSpace(detail) ? fallback : $"Mercado Pago: {detail}";
+        }
+        catch
+        {
+            return fallback;
+        }
+    }
 }
 
+internal sealed record MercadoPagoCreateResult(MercadoPagoSubscription? Subscription, string Error);
 internal sealed record MercadoPagoSubscription(string Id, string Status, string ExternalReference, string CheckoutUrl, decimal AmountArs);
 internal sealed record MercadoPagoAuthorizedPayment(string SubscriptionId, string PaymentStatus, DateTimeOffset? DebitDate);
 internal sealed record BillingCheckoutRequest(string Plan, int AdditionalDevices, int AdditionalPanelUsers, string PayerEmail);

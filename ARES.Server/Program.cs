@@ -268,9 +268,11 @@ app.MapPost("/api/billing/checkout", async (BillingCheckoutRequest request, Http
     decimal usd = definition.MonthlyPriceUsd + request.AdditionalDevices * definition.AdditionalDeviceUsd + request.AdditionalPanelUsers * definition.AdditionalPanelUserUsd;
     decimal ars = decimal.Round(usd * mercadoPago.UsdArsRate, 2);
     string origin = $"{context.Request.Scheme}://{context.Request.Host}";
-    MercadoPagoSubscription? created = await mercadoPago.CreateSubscriptionAsync(CurrentOrganization(context), payerEmail,
+    MercadoPagoCreateResult creation = await mercadoPago.CreateSubscriptionAsync(CurrentOrganization(context), payerEmail,
         $"ARES {definition.DisplayName}", ars, $"{origin}/portal", $"{origin}/api/billing/mercadopago/webhook?source_news=webhooks", cancellationToken);
-    if (created is null || string.IsNullOrWhiteSpace(created.CheckoutUrl)) return Results.BadRequest(new { error = "Mercado Pago no pudo crear la suscripción." });
+    MercadoPagoSubscription? created = creation.Subscription;
+    if (created is null || string.IsNullOrWhiteSpace(created.CheckoutUrl))
+        return Results.BadRequest(new { error = string.IsNullOrWhiteSpace(creation.Error) ? "Mercado Pago no pudo crear la suscripción." : creation.Error });
     await persistence.UpsertBillingSubscriptionAsync(new(CurrentOrganization(context), created.Id, plan, request.AdditionalDevices,
         request.AdditionalPanelUsers, ars, created.Status, "", null));
     return Results.Ok(new { checkoutUrl = created.CheckoutUrl, amountUsd = usd, amountArs = ars });

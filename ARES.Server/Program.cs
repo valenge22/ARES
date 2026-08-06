@@ -74,6 +74,12 @@ foreach (Guid organizationId in await persistence.GetOrganizationIdsAsync())
 string latestAgentVersion = builder.Configuration["ARES_LATEST_AGENT_VERSION"] ?? "1.7.3";
 string agentUpdateUrl = builder.Configuration["ARES_AGENT_UPDATE_URL"]
     ?? "https://github.com/valenge22/ARES/releases/download/v1.7.3/ARES-Agent-Remoto-Windows-x64.zip";
+string latestAgentSetupUrl = builder.Configuration["ARES_AGENT_SETUP_URL"]
+    ?? "https://github.com/valenge22/ARES/releases/download/v1.7.3/ARES-Agent-Setup.exe";
+string latestControlWindowsUrl = builder.Configuration["ARES_CONTROL_WINDOWS_URL"]
+    ?? "https://github.com/valenge22/ARES/releases/download/control-v1.6.6/ARES-Centro-Control-Setup.exe";
+string latestControlMacUrl = builder.Configuration["ARES_CONTROL_MAC_URL"]
+    ?? "https://github.com/valenge22/ARES/releases/download/mac-v1.5.4/ARES-Centro-Control-macOS-arm64.pkg";
 if (File.Exists(updateVersionPath)) latestAgentVersion = File.ReadAllText(updateVersionPath).Trim();
 foreach (AgentStatus agent in await LoadStateAsync("agents", dataPath, new List<AgentStatus>()))
 {
@@ -115,6 +121,7 @@ app.Use(async (context, next) =>
         context.Request.Path.Equals("/admin-mfa.js") ||
         context.Request.Path.Equals("/admin-license.js") ||
         context.Request.Path.Equals("/portal-billing.js") ||
+        context.Request.Path.Equals("/api/downloads") ||
         context.Request.Path.StartsWithSegments("/health") ||
         context.Request.Path.StartsWithSegments("/solicitar") ||
         context.Request.Path.StartsWithSegments("/auth") ||
@@ -198,6 +205,12 @@ app.MapGet("/health", () => Results.Ok(new
 
 app.MapGet("/", () => Results.File(Path.Combine(app.Environment.ContentRootPath, "wwwroot", "index.html"), "text/html; charset=utf-8"));
 app.MapGet("/portal", () => Results.File(Path.Combine(app.Environment.ContentRootPath, "wwwroot", "portal.html"), "text/html; charset=utf-8"));
+app.MapGet("/api/downloads", () => Results.Ok(new
+{
+    controlWindows = new { version = latestWindowsControlVersion, url = latestControlWindowsUrl },
+    controlMac = new { version = latestMacControlVersion, url = latestControlMacUrl },
+    agentWindows = new { version = latestAgentVersion, url = latestAgentSetupUrl }
+}));
 app.MapGet("/admin-ares", () => Results.File(Path.Combine(app.Environment.ContentRootPath, "wwwroot", "admin-ares.html"), "text/html; charset=utf-8"));
 app.MapGet("/admin-mfa.js", (HttpContext context) =>
 {

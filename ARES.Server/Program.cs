@@ -280,8 +280,9 @@ app.MapPost("/api/billing/cancel", async (HttpContext context, CancellationToken
     if (!IsOwner(context)) return Results.Forbid();
     BillingSubscription? subscription = await persistence.GetBillingSubscriptionAsync(CurrentOrganization(context));
     if (subscription is null || string.IsNullOrWhiteSpace(subscription.ProviderSubscriptionId)) return Results.NotFound();
-    if (!await mercadoPago.CancelSubscriptionAsync(subscription.ProviderSubscriptionId, cancellationToken))
-        return Results.BadRequest(new { error = "Mercado Pago no pudo cancelar la suscripción." });
+    bool canceledRemotely = await mercadoPago.CancelSubscriptionAsync(subscription.ProviderSubscriptionId, cancellationToken);
+    if (!canceledRemotely && subscription.Status == "authorized")
+        return Results.BadRequest(new { error = "Mercado Pago no pudo cancelar la suscripción activa." });
     await persistence.UpsertBillingSubscriptionAsync(subscription with { Status = "cancelled" });
     if (!subscription.PaidUntil.HasValue)
     {
@@ -289,7 +290,7 @@ app.MapPost("/api/billing/cancel", async (HttpContext context, CancellationToken
         await persistence.UpdateLicenseAsync(subscription.OrganizationId, subscription.RequestedPlan, "Canceled", definition.IncludedDevices,
             subscription.AdditionalDevices, definition.IncludedPanelUsers, subscription.AdditionalPanelUsers, 0, null, 3);
     }
-    return Results.Ok(new { canceled = true, accessUntil = subscription.PaidUntil });
+    return Results.Ok(new { canceled = true, canceledRemotely, accessUntil = subscription.PaidUntil });
 });
 
 app.MapPost("/api/billing/mercadopago/webhook", async (HttpContext context, JsonElement payload, CancellationToken cancellationToken) =>

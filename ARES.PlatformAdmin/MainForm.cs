@@ -18,6 +18,7 @@ internal sealed class MainForm : Form
         var alerts = HeaderButton("Alertas"); alerts.Click += (_, _) => ShowAlerts(); header.Controls.Add(alerts);
         var billing = HeaderButton("Facturación"); billing.Click += async (_, _) => await ShowBillingAsync(); header.Controls.Add(billing);
         var metricsButton = HeaderButton("Métricas"); metricsButton.Click += async (_, _) => await ShowMetricsAsync(); header.Controls.Add(metricsButton);
+        var testButton = HeaderButton("Prueba integral"); testButton.Click += async (_, _) => await RunSystemTestAsync(); header.Controls.Add(testButton);
         var refresh = HeaderButton("Actualizar"); refresh.Click += async (_, _) => await LoadAsync(); header.Controls.Add(refresh);
         var metrics = new Panel { Dock = DockStyle.Top, Height = 65, Padding = new Padding(24, 10, 24, 8), BackColor = Color.White }; metrics.Controls.Add(summary);
         ConfigureGrid();
@@ -159,6 +160,29 @@ internal sealed class MainForm : Form
         }
         catch (Exception ex) { MessageBox.Show(ex.Message, "Métricas", MessageBoxButtons.OK, MessageBoxIcon.Error); }
     }
+    private async Task RunSystemTestAsync()
+    {
+        using var dialog = new Form { Text = "Prueba integral de ARES", Width = 820, Height = 610, StartPosition = FormStartPosition.CenterParent, BackColor = Color.White };
+        var status = new Label { Dock = DockStyle.Top, Height = 54, Padding = new Padding(18, 14, 18, 8), Font = new Font("Segoe UI", 12, FontStyle.Bold), Text = "Ejecutando verificaciones…" };
+        var results = new ListView { Dock = DockStyle.Fill, View = View.Details, FullRowSelect = true, GridLines = true };
+        results.Columns.Add("Verificación", 260); results.Columns.Add("Resultado", 110); results.Columns.Add("Detalle", 390);
+        var manual = new Label { Dock = DockStyle.Bottom, Height = 92, Padding = new Padding(18, 10, 18, 10), Text = "Pasos manuales posteriores: 1) registrar un correo nuevo y confirmarlo; 2) contratar el plan de prueba comercial; 3) instalar y vincular ARES Agent en una PC o sesión de prueba.", ForeColor = Color.FromArgb(71, 85, 105) };
+        dialog.Controls.Add(results); dialog.Controls.Add(manual); dialog.Controls.Add(status); dialog.Show(this);
+        var checks = new List<SystemCheck>();
+        async Task Check(string name, Func<Task<string>> action)
+        {
+            try { checks.Add(new(name, true, await action())); }
+            catch (Exception ex) { checks.Add(new(name, false, ex.Message)); }
+            SystemCheck item = checks[^1]; var row = new ListViewItem(item.Name); row.SubItems.Add(item.Success ? "Correcto" : "Error"); row.SubItems.Add(item.Detail); row.ForeColor = item.Success ? Color.FromArgb(21, 128, 61) : Color.FromArgb(185, 28, 28); results.Items.Add(row); await Task.Yield();
+        }
+        await Check("Conexión HTTPS", async () => { if (!PlatformAuth.ServerUrl.StartsWith("https://", StringComparison.OrdinalIgnoreCase)) throw new InvalidOperationException("La URL no utiliza HTTPS."); using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(60) }; using var response = await http.GetAsync($"{PlatformAuth.ServerUrl}/health"); await EnsureSuccessAsync(response); return "Servidor accesible mediante HTTPS."; });
+        await Check("Servidor y almacenamiento", async () => { using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(60) }; HealthInfo? health = await http.GetFromJsonAsync<HealthInfo>($"{PlatformAuth.ServerUrl}/health"); if (health?.Status != "ok" || health.Storage != "postgresql") throw new InvalidOperationException("El servidor o PostgreSQL no están listos."); return $"{health.Service} · PostgreSQL conectado."; });
+        await Check("Autenticación", async () => { using HttpClient http = PlatformAuth.Client.CreateHttpClient(); using var response = await http.GetAsync($"{PlatformAuth.ServerUrl}/api/auth/me"); await EnsureSuccessAsync(response); return $"Sesión válida: {PlatformAuth.Client.User?.Email}."; });
+        await Check("Permiso de plataforma", async () => { using HttpClient http = PlatformAuth.Client.CreateHttpClient(); PlatformLicense? access = await http.GetFromJsonAsync<PlatformLicense>($"{PlatformAuth.ServerUrl}/api/license"); if (access?.CanManagePlatform != true) throw new UnauthorizedAccessException("La cuenta no es administradora de plataforma."); return "Administrador de plataforma autorizado."; });
+        await Check("Organizaciones", async () => { using HttpClient http = PlatformAuth.Client.CreateHttpClient(); var rows = await http.GetFromJsonAsync<List<OrganizationLicense>>($"{PlatformAuth.ServerUrl}/api/platform/organizations") ?? []; return $"{rows.Count} organizaciones disponibles."; });
+        await Check("Facturación y Mercado Pago", async () => { using HttpClient http = PlatformAuth.Client.CreateHttpClient(); var rows = await http.GetFromJsonAsync<List<PlatformPayment>>($"{PlatformAuth.ServerUrl}/api/platform/billing/history") ?? []; return $"Endpoint operativo · {rows.Count} movimientos almacenados."; });
+        int passed = checks.Count(x => x.Success); status.Text = passed == checks.Count ? $"Sistema listo: {passed}/{checks.Count} verificaciones correctas" : $"Revisar sistema: {passed}/{checks.Count} verificaciones correctas"; status.ForeColor = passed == checks.Count ? Color.FromArgb(21, 128, 61) : Color.FromArgb(185, 28, 28);
+    }
     private static Control MetricCard(string title, string value)
     {
         var panel = new Panel { Dock = DockStyle.Fill, BackColor = Color.White, Margin = new Padding(5), Padding = new Padding(12) };
@@ -207,3 +231,5 @@ internal sealed class PlatformPayment
 }
 internal sealed class MetricRow { public string Label { get; set; } = ""; public decimal Value { get; set; } public string ValueText => Value.ToString("N2"); }
 internal sealed class ExpirationRow { public string Organization { get; set; } = ""; public string Plan { get; set; } = ""; public string Date { get; set; } = ""; public int Days { get; set; } }
+internal sealed record SystemCheck(string Name, bool Success, string Detail);
+internal sealed class HealthInfo { public string Service { get; set; } = ""; public string Status { get; set; } = ""; public string Storage { get; set; } = ""; public string Authentication { get; set; } = ""; public string Billing { get; set; } = ""; }

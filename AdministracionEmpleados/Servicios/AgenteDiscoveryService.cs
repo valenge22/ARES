@@ -15,6 +15,12 @@ public sealed record AgenteDetectado(string Id, string Equipo, string Usuario, s
 public sealed class AgenteDiscoveryService
 {
     private static readonly string sessionId = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes($"{Environment.MachineName}|{Environment.UserName}|ARES.ControlCenter")))[..24];
+    public async Task<LicenseResponse> ObtenerLicenciaAsync(CancellationToken cancelacion = default)
+    {
+        using HttpClient client = CrearCliente();
+        return await client.GetFromJsonAsync<LicenseResponse>($"{AresSettings.Cargar().ServerUrl.TrimEnd('/')}/api/license", cancelacion)
+            ?? throw new InvalidDataException("El servidor no devolvió la licencia.");
+    }
     public async Task<OrganizationSetupInfo?> ObtenerConfiguracionInicialAsync(CancellationToken cancelacion = default)
     {
         using HttpClient client = CrearCliente();

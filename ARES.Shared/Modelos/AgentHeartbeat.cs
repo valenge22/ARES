@@ -166,3 +166,29 @@ public sealed class ControlUpdateRequest
 {
     public List<string> SessionIds { get; set; } = [];
 }
+
+public sealed class LicenseResponse
+{
+    public LicenseSummary License { get; set; } = new();
+    public bool CanManagePlatform { get; set; }
+}
+
+public sealed class LicenseSummary
+{
+    public string Plan { get; set; } = "";
+    public string PlanName { get; set; } = "";
+    public string Status { get; set; } = "";
+    public string StatusName { get; set; } = "";
+    public DateTimeOffset TrialEndsAt { get; set; }
+    public DateTimeOffset? ExpiresAt { get; set; }
+    public int GraceDays { get; set; }
+    public int MaxDevices { get; set; }
+    public int AdditionalDevices { get; set; }
+    public int TotalDevices { get; set; }
+    public int MaxPanelUsers { get; set; }
+    public int AdditionalPanelUsers { get; set; }
+    public int TotalPanelUsers { get; set; }
+    public long UsedDevices { get; set; }
+    public long UsedPanelUsers { get; set; }
+    public decimal MonthlyPriceUsd { get; set; }
+}

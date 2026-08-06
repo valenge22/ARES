@@ -14,6 +14,14 @@ internal sealed class AresApiClient
     public AresApiClient(MacSettings settings) => this.settings = settings;
     public void Update(MacSettings value) => settings = value;
 
+    public async Task<LicenseResponse> LicenseAsync()
+    {
+        using var request = Request(HttpMethod.Get, "/api/license");
+        using var response = await http.SendAsync(request); response.EnsureSuccessStatusCode();
+        return await response.Content.ReadFromJsonAsync<LicenseResponse>()
+            ?? throw new InvalidDataException("El servidor no devolvió la licencia.");
+    }
+
     public async Task<OrganizationSetupInfo?> OrganizationSetupAsync()
     {
         using var request = Request(HttpMethod.Get, "/api/onboarding"); using var response = await http.SendAsync(request);

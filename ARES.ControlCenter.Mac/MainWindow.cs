@@ -199,18 +199,30 @@ public sealed class MainWindow : Window
 
     private async Task ShowSettingsAsync()
     {
+        LicenseSummary? license = null;
+        string licenseText;
+        try
+        {
+            license = (await api.LicenseAsync()).License;
+            DateTimeOffset? expiration = license.Plan == "Trial" ? license.TrialEndsAt : license.ExpiresAt;
+            licenseText = $"Licencia: {license.PlanName} · {license.StatusName}\nEquipos: {license.UsedDevices}/{license.TotalDevices} · Usuarios: {license.UsedPanelUsers}/{license.TotalPanelUsers} · Vencimiento: {(expiration.HasValue ? expiration.Value.ToLocalTime().ToString("dd/MM/yyyy") : "Sin vencimiento")}";
+        }
+        catch (Exception ex) { licenseText = $"No se pudo consultar la licencia: {ex.Message}"; }
         var url = new TextBox { Text = settings.ServerUrl, PlaceholderText = "Servidor HTTPS" };
         var save = new Button { Content = "Guardar", HorizontalAlignment = HorizontalAlignment.Right, Padding = new Thickness(18, 9) };
         var logout = new Button { Content = "Cerrar sesión", HorizontalAlignment = HorizontalAlignment.Right, Padding = new Thickness(18, 9) };
         var users = new Button { Content = "Administrar usuarios", IsVisible = MacControlAuth.Client.User?.Role == "Owner", Padding = new Thickness(18, 9) };
         var groups = new Button { Content = "Administrar grupos", IsVisible = MacControlAuth.Client.User?.Role is "Owner" or "Administrator", Padding = new Thickness(18, 9) };
-        var dialog = new Window { Title = "Configuración de ARES", Width = 520, Height = 280, WindowStartupLocation = WindowStartupLocation.CenterOwner };
+        var manageLicense = new Button { Content = "Administrar suscripción", IsVisible = MacControlAuth.Client.User?.Role == "Owner", Padding = new Thickness(18, 9), HorizontalAlignment = HorizontalAlignment.Left };
+        var licenseStatus = new TextBlock { Text = licenseText, TextWrapping = TextWrapping.Wrap, Foreground = Brush.Parse(license?.Status is "Active" or "Trial" ? "#15803D" : "#B91C1C") };
+        var dialog = new Window { Title = "Configuración de ARES", Width = 560, Height = 420, WindowStartupLocation = WindowStartupLocation.CenterOwner };
         string account = MacControlAuth.Client.User is null ? "" : $"{MacControlAuth.Client.User.DisplayName} · {MacControlAuth.Client.User.Email} · {MacControlAuth.Client.User.Role}";
-        dialog.Content = new StackPanel { Margin = new Thickness(24), Spacing = 12, Children = { new TextBlock { Text = $"Sesión: {account}" }, new TextBlock { Text = "Dirección del servidor" }, url, users, groups, new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Spacing = 8, Children = { logout, save } } } };
+        dialog.Content = new StackPanel { Margin = new Thickness(24), Spacing = 12, Children = { new TextBlock { Text = $"Sesión: {account}" }, licenseStatus, manageLicense, new TextBlock { Text = "Dirección del servidor" }, url, users, groups, new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Spacing = 8, Children = { logout, save } } } };
         save.Click += (_, _) => { settings.ServerUrl = url.Text?.Trim() ?? ""; settings.Save(); api.Update(settings); dialog.Close(); };
         logout.Click += (_, _) => { MacControlAuth.Client.Logout(); if (Application.Current?.ApplicationLifetime is Avalonia.Controls.ApplicationLifetimes.IClassicDesktopStyleApplicationLifetime desktop) desktop.Shutdown(); };
         users.Click += async (_, _) => await ShowUsersAsync(dialog);
         groups.Click += async (_, _) => await ShowGroupsAsync(dialog);
+        manageLicense.Click += (_, _) => System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("/usr/bin/open") { ArgumentList = { $"{settings.ServerUrl.TrimEnd('/')}/portal" }, UseShellExecute = false });
         await dialog.ShowDialog(this); await ShowAgentsAsync();
     }
 

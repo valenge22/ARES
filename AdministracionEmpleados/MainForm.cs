@@ -830,6 +830,12 @@ namespace AdministracionEmpleados
             TextBox txtServidor = CrearCampoConfiguracion("URL HTTPS del servidor", configuracion.ServerUrl, contenido);
             string usuario = AresControlAuth.Client.User is null ? "" : $"{AresControlAuth.Client.User.DisplayName} · {AresControlAuth.Client.User.Email} · {NombreRol(AresControlAuth.Client.User.Role)}";
             contenido.Controls.Add(new Label { AutoSize = true, ForeColor = Color.FromArgb(51, 65, 85), Margin = new Padding(0, 14, 0, 0), Text = $"Sesión: {usuario}" });
+            var licencia = new Label { AutoSize = false, Width = 560, Height = 78, ForeColor = Color.FromArgb(51, 65, 85), Margin = new Padding(0, 16, 0, 0), Text = "Licencia: consultando…" };
+            contenido.Controls.Add(licencia);
+            var administrarLicencia = new Button { Text = "Administrar suscripción", Width = 210, Height = 38, Margin = new Padding(0, 4, 0, 0), FlatStyle = FlatStyle.Flat, BackColor = Color.FromArgb(2, 132, 199), ForeColor = Color.White, Cursor = Cursors.Hand, Visible = AresControlAuth.Client.User?.Role == "Owner" };
+            administrarLicencia.FlatAppearance.BorderSize = 0;
+            administrarLicencia.Click += (_, _) => System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo($"{AresSettings.Cargar().ServerUrl.TrimEnd('/')}/portal") { UseShellExecute = true });
+            contenido.Controls.Add(administrarLicencia);
             var estado = new Label { AutoSize = true, ForeColor = Color.FromArgb(100, 116, 139), Margin = new Padding(0, 14, 0, 0), Text = "La sesión está protegida para este usuario de Windows." };
             var guardar = new Button { Text = "Guardar y probar conexión", Width = 220, Height = 40, Margin = new Padding(0, 20, 0, 0), FlatStyle = FlatStyle.Flat, BackColor = Color.FromArgb(37, 99, 235), ForeColor = Color.White, Cursor = Cursors.Hand };
             guardar.FlatAppearance.BorderSize = 0;
@@ -868,7 +874,25 @@ namespace AdministracionEmpleados
             contenido.Controls.Add(estado);
             tarjeta.Controls.Add(contenido);
             tarjeta.Controls.Add(titulo);
+            _ = CargarLicenciaAsync();
             return tarjeta;
+
+            async Task CargarLicenciaAsync()
+            {
+                try
+                {
+                    LicenseSummary item = (await discoveryService.ObtenerLicenciaAsync()).License;
+                    if (licencia.IsDisposed) return;
+                    DateTimeOffset? vencimiento = item.Plan == "Trial" ? item.TrialEndsAt : item.ExpiresAt;
+                    string fecha = vencimiento.HasValue ? vencimiento.Value.ToLocalTime().ToString("dd/MM/yyyy") : "Sin vencimiento";
+                    licencia.Text = $"Licencia: {item.PlanName} · {item.StatusName}\nEquipos: {item.UsedDevices}/{item.TotalDevices} · Usuarios: {item.UsedPanelUsers}/{item.TotalPanelUsers} · Vencimiento: {fecha}";
+                    licencia.ForeColor = item.Status is "Active" or "Trial" ? Color.FromArgb(21, 128, 61) : Color.FromArgb(220, 38, 38);
+                }
+                catch (Exception ex)
+                {
+                    if (!licencia.IsDisposed) { licencia.Text = $"No se pudo consultar la licencia: {ex.Message}"; licencia.ForeColor = Color.FromArgb(220, 38, 38); }
+                }
+            }
         }
 
         private async Task MostrarUsuariosAsync()

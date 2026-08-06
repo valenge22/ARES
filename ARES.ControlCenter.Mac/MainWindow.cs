@@ -204,8 +204,10 @@ public sealed class MainWindow : Window
         try
         {
             license = (await api.LicenseAsync()).License;
-            DateTimeOffset? expiration = license.Plan == "Trial" ? license.TrialEndsAt : license.ExpiresAt;
-            licenseText = $"Licencia: {license.PlanName} · {license.StatusName}\nEquipos: {license.UsedDevices}/{license.TotalDevices} · Usuarios: {license.UsedPanelUsers}/{license.TotalPanelUsers} · Vencimiento: {(expiration.HasValue ? expiration.Value.ToLocalTime().ToString("dd/MM/yyyy") : "Sin vencimiento")}";
+            DateTimeOffset? expiration = license.AccessEndsAt ?? (license.Plan == "Trial" ? license.TrialEndsAt : license.ExpiresAt);
+            string statusName = string.IsNullOrWhiteSpace(license.AccessStatusName) ? license.StatusName : license.AccessStatusName;
+            string grace = license.IsInGrace && license.GraceEndsAt.HasValue ? $" · Gracia hasta {license.GraceEndsAt.Value.ToLocalTime():dd/MM/yyyy}" : "";
+            licenseText = $"Licencia: {license.PlanName} · {statusName}{grace}\nEquipos: {license.UsedDevices}/{license.TotalDevices} · Usuarios: {license.UsedPanelUsers}/{license.TotalPanelUsers} · Vencimiento: {(expiration.HasValue ? expiration.Value.ToLocalTime().ToString("dd/MM/yyyy") : "Sin vencimiento")}";
         }
         catch (Exception ex) { licenseText = $"No se pudo consultar la licencia: {ex.Message}"; }
         var url = new TextBox { Text = settings.ServerUrl, PlaceholderText = "Servidor HTTPS" };
@@ -214,7 +216,8 @@ public sealed class MainWindow : Window
         var users = new Button { Content = "Administrar usuarios", IsVisible = MacControlAuth.Client.User?.Role == "Owner", Padding = new Thickness(18, 9) };
         var groups = new Button { Content = "Administrar grupos", IsVisible = MacControlAuth.Client.User?.Role is "Owner" or "Administrator", Padding = new Thickness(18, 9) };
         var manageLicense = new Button { Content = "Administrar suscripción", IsVisible = MacControlAuth.Client.User?.Role == "Owner", Padding = new Thickness(18, 9), HorizontalAlignment = HorizontalAlignment.Left };
-        var licenseStatus = new TextBlock { Text = licenseText, TextWrapping = TextWrapping.Wrap, Foreground = Brush.Parse(license?.Status is "Active" or "Trial" ? "#15803D" : "#B91C1C") };
+        string effectiveStatus = string.IsNullOrWhiteSpace(license?.AccessStatus) ? license?.Status ?? "" : license.AccessStatus;
+        var licenseStatus = new TextBlock { Text = licenseText, TextWrapping = TextWrapping.Wrap, Foreground = Brush.Parse(effectiveStatus == "Active" ? "#15803D" : license?.IsInGrace == true ? "#C2410C" : "#B91C1C") };
         var dialog = new Window { Title = "Configuración de ARES", Width = 560, Height = 420, WindowStartupLocation = WindowStartupLocation.CenterOwner };
         string account = MacControlAuth.Client.User is null ? "" : $"{MacControlAuth.Client.User.DisplayName} · {MacControlAuth.Client.User.Email} · {MacControlAuth.Client.User.Role}";
         dialog.Content = new StackPanel { Margin = new Thickness(24), Spacing = 12, Children = { new TextBlock { Text = $"Sesión: {account}" }, licenseStatus, manageLicense, new TextBlock { Text = "Dirección del servidor" }, url, users, groups, new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Spacing = 8, Children = { logout, save } } } };

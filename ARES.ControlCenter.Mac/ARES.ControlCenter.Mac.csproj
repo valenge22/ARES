@@ -5,7 +5,7 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <AssemblyName>ARES.ControlCenter.Mac</AssemblyName>
-    <Version>1.5.3</Version>
+    <Version>1.5.4</Version>
     <RuntimeIdentifiers>osx-arm64</RuntimeIdentifiers>
   </PropertyGroup>
   <ItemGroup>

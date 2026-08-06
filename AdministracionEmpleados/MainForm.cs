@@ -883,10 +883,13 @@ namespace AdministracionEmpleados
                 {
                     LicenseSummary item = (await discoveryService.ObtenerLicenciaAsync()).License;
                     if (licencia.IsDisposed) return;
-                    DateTimeOffset? vencimiento = item.Plan == "Trial" ? item.TrialEndsAt : item.ExpiresAt;
+                    DateTimeOffset? vencimiento = item.AccessEndsAt ?? (item.Plan == "Trial" ? item.TrialEndsAt : item.ExpiresAt);
                     string fecha = vencimiento.HasValue ? vencimiento.Value.ToLocalTime().ToString("dd/MM/yyyy") : "Sin vencimiento";
-                    licencia.Text = $"Licencia: {item.PlanName} · {item.StatusName}\nEquipos: {item.UsedDevices}/{item.TotalDevices} · Usuarios: {item.UsedPanelUsers}/{item.TotalPanelUsers} · Vencimiento: {fecha}";
-                    licencia.ForeColor = item.Status is "Active" or "Trial" ? Color.FromArgb(21, 128, 61) : Color.FromArgb(220, 38, 38);
+                    string estado = string.IsNullOrWhiteSpace(item.AccessStatusName) ? item.StatusName : item.AccessStatusName;
+                    string aviso = item.IsInGrace && item.GraceEndsAt.HasValue ? $" · Gracia hasta {item.GraceEndsAt.Value.ToLocalTime():dd/MM/yyyy}" : "";
+                    licencia.Text = $"Licencia: {item.PlanName} · {estado}{aviso}\nEquipos: {item.UsedDevices}/{item.TotalDevices} · Usuarios: {item.UsedPanelUsers}/{item.TotalPanelUsers} · Vencimiento: {fecha}";
+                    string estadoInterno = string.IsNullOrWhiteSpace(item.AccessStatus) ? item.Status : item.AccessStatus;
+                    licencia.ForeColor = estadoInterno == "Active" ? Color.FromArgb(21, 128, 61) : item.IsInGrace ? Color.FromArgb(194, 65, 12) : Color.FromArgb(220, 38, 38);
                 }
                 catch (Exception ex)
                 {

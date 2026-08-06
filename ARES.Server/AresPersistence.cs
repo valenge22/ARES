@@ -808,7 +808,7 @@ internal sealed class AresPersistence
         command.CommandText = """
             select license_status,
                    case when license_plan='Trial' then trial_ends_at else license_expires_at end,
-                   license_grace_days,max_devices,
+                   license_grace_days,(max_devices+additional_devices),
                    (select count(*) from ares_devices where organization_id=@organization and enabled=true and device_id<>@device)
             from ares_organizations where organization_id=@organization and enabled=true
             """;
@@ -957,10 +957,25 @@ internal sealed record LicenseInfo(Guid OrganizationId, string OrganizationName,
     DateTimeOffset TrialEndsAt, DateTimeOffset? ExpiresAt, int GraceDays, int MaxDevices, int AdditionalDevices,
     int MaxPanelUsers, int AdditionalPanelUsers, decimal MonthlyPriceUsd, long UsedDevices, long UsedPanelUsers)
 {
+    public DateTimeOffset? AccessEndsAt => Plan == "Trial" ? TrialEndsAt : ExpiresAt;
+    public DateTimeOffset? GraceEndsAt => AccessEndsAt?.AddDays(GraceDays);
+    public string AccessStatus
+    {
+        get
+        {
+            if (Status != "Active") return Status;
+            DateTimeOffset? end = AccessEndsAt;
+            if (!end.HasValue || DateTimeOffset.UtcNow <= end.Value) return "Active";
+            return DateTimeOffset.UtcNow <= end.Value.AddDays(GraceDays) ? "PastDue" : "Expired";
+        }
+    }
+    public bool IsInGrace => AccessStatus == "PastDue";
+    public bool AllowsNewResources => AccessStatus is "Active" or "PastDue";
     public int TotalDevices => MaxDevices + AdditionalDevices;
     public int TotalPanelUsers => MaxPanelUsers + AdditionalPanelUsers;
     public string PlanName => Plan switch { "Trial" => "Prueba", "Basic" => "Esencial", "Professional" => "Profesional", "Business" => "Empresa", "Enterprise" => "Corporativo", _ => Plan };
     public string StatusName => Status switch { "Active" => "Activa", "Suspended" => "Suspendida", "Expired" => "Vencida", "Canceled" => "Cancelada", "PastDue" => "Pago pendiente", _ => Status };
+    public string AccessStatusName => AccessStatus switch { "Active" => "Activa", "Suspended" => "Suspendida", "Expired" => "Vencida", "Canceled" => "Cancelada", "PastDue" => "Pago pendiente · período de gracia", _ => AccessStatus };
 }
 internal sealed record AuthSessionInfo(Guid SessionId, string ClientName, string IpAddress, DateTimeOffset CreatedAt, DateTimeOffset LastSeenAt, bool Revoked);
 internal sealed record BillingSubscription(Guid OrganizationId, string ProviderSubscriptionId, string RequestedPlan,

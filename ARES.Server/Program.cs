@@ -39,8 +39,8 @@ string updateVersionPath = Path.Combine(AppContext.BaseDirectory, "data", "agent
 string controlSessionsPath = Path.Combine(AppContext.BaseDirectory, "data", "control-sessions.json");
 string controlWindowsPackagePath = Path.Combine(AppContext.BaseDirectory, "data", "control-windows-update.zip");
 string controlMacPackagePath = Path.Combine(AppContext.BaseDirectory, "data", "control-macos-update.pkg");
-string latestWindowsControlVersion = "1.6.5";
-string latestMacControlVersion = "1.5.3";
+string latestWindowsControlVersion = "1.6.6";
+string latestMacControlVersion = "1.5.4";
 Directory.CreateDirectory(Path.GetDirectoryName(dataPath)!);
 
 var agents = new ConcurrentDictionary<string, AgentStatus>(StringComparer.OrdinalIgnoreCase);
@@ -263,6 +263,12 @@ app.MapPut("/api/organization", async (UpdateOrganizationRequest request, HttpCo
 });
 app.MapGet("/api/license", async (HttpContext context) =>
 {
+    BillingSubscription? billing = await persistence.GetBillingSubscriptionAsync(CurrentOrganization(context));
+    if (billing is not null && mercadoPago.IsConfigured &&
+        (billing.Status is "pending" or "authorized" or "paused" ||
+         (!string.IsNullOrWhiteSpace(billing.LastPaymentStatus) && billing.LastPaymentStatus != "approved")) &&
+        (!billing.PaidUntil.HasValue || billing.PaidUntil.Value <= DateTimeOffset.UtcNow.AddDays(1)))
+        await ReconcileBillingAsync(billing, mercadoPago, persistence, CancellationToken.None);
     LicenseInfo? license = await persistence.GetLicenseAsync(CurrentOrganization(context));
     return license is null ? Results.NotFound() : Results.Ok(new { license, canManagePlatform = IsPlatformAdmin(context) });
 });
@@ -604,7 +610,7 @@ app.MapPost("/api/admin/registrations/{id:guid}/approve", async (Guid id, Approv
     if (!ValidRole(request.Role) || request.Role == "Owner") return Results.BadRequest(new { error = "Rol inválido." });
     AuthenticatedAdmin admin = CurrentAdmin(context);
     LicenseInfo? license = await persistence.GetLicenseAsync(admin.OrganizationId);
-    if (license is null || license.UsedPanelUsers >= license.TotalPanelUsers)
+    if (license is null || !license.AllowsNewResources || license.UsedPanelUsers >= license.TotalPanelUsers)
         return Results.Json(new { error = "No hay cupos disponibles para nuevos usuarios del panel." }, statusCode: 402);
     return await persistence.ApproveAsync(id, admin.OrganizationId, request.Role, admin.UserId) ? Results.Ok(new { approved = true }) : Results.NotFound();
 });
@@ -621,7 +627,7 @@ app.MapPut("/api/admin/users/{id:guid}", async (Guid id, UpdateAdminRequest requ
     if (request.Enabled && target is not null && !target.Enabled)
     {
         LicenseInfo? license = await persistence.GetLicenseAsync(organizationId);
-        if (license is null || license.UsedPanelUsers >= license.TotalPanelUsers)
+        if (license is null || !license.AllowsNewResources || license.UsedPanelUsers >= license.TotalPanelUsers)
             return Results.Json(new { error = "No hay cupos disponibles para reactivar este usuario." }, statusCode: 402);
     }
     return await persistence.UpdateAdminAsync(id, organizationId, request.Role, request.Enabled) ? Results.Ok(new { updated = true }) : Results.NotFound();
@@ -640,7 +646,7 @@ app.MapPost("/api/admin/invitations", async (CreateInvitationRequest request, Ht
         return Results.BadRequest(new { error = "Los usos deben ser 1-1000 y la duración 1-720 horas." });
     if (!ValidRole(request.Role) || request.Role == "Owner") return Results.BadRequest(new { error = "Rol inválido." });
     LicenseInfo? license = await persistence.GetLicenseAsync(CurrentOrganization(context));
-    long availableSeats = (license?.TotalPanelUsers ?? 0) - (license?.UsedPanelUsers ?? 0);
+    long availableSeats = license?.AllowsNewResources == true ? license.TotalPanelUsers - license.UsedPanelUsers : 0;
     if (availableSeats < 1 || request.MaxUses > availableSeats)
         return Results.Json(new { error = $"La licencia tiene {Math.Max(0, availableSeats)} cupos disponibles para usuarios del panel." }, statusCode: 402);
     string raw = RandomNumberGenerator.GetHexString(12);
@@ -661,8 +667,7 @@ app.MapPost("/api/admin/device-enrollments", async (CreateDeviceEnrollmentReques
 {
     if (!IsAdministrator(context)) return Results.Forbid();
     LicenseInfo? license = await persistence.GetLicenseAsync(CurrentOrganization(context));
-    DateTimeOffset? licenseEnd = license?.Plan == "Trial" ? license.TrialEndsAt : license?.ExpiresAt;
-    if (license is null || license.Status != "Active" || (licenseEnd.HasValue && DateTimeOffset.UtcNow > licenseEnd.Value.AddDays(license.GraceDays)))
+    if (license is null || !license.AllowsNewResources)
         return Results.Json(new { error = "La licencia está vencida o suspendida." }, statusCode: 402);
     if (license.UsedDevices >= license.TotalDevices)
         return Results.Json(new { error = $"Se alcanzó el límite de {license.TotalDevices} equipos de la licencia." }, statusCode: 402);

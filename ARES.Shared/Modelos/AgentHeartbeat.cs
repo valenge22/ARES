@@ -179,6 +179,12 @@ public sealed class LicenseSummary
     public string PlanName { get; set; } = "";
     public string Status { get; set; } = "";
     public string StatusName { get; set; } = "";
+    public string AccessStatus { get; set; } = "";
+    public string AccessStatusName { get; set; } = "";
+    public bool IsInGrace { get; set; }
+    public bool AllowsNewResources { get; set; }
+    public DateTimeOffset? AccessEndsAt { get; set; }
+    public DateTimeOffset? GraceEndsAt { get; set; }
     public DateTimeOffset TrialEndsAt { get; set; }
     public DateTimeOffset? ExpiresAt { get; set; }
     public int GraceDays { get; set; }

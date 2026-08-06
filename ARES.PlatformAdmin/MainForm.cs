@@ -17,6 +17,7 @@ internal sealed class MainForm : Form
         var web = HeaderButton("Abrir respaldo web"); web.Click += (_, _) => OpenWeb(); header.Controls.Add(web);
         var alerts = HeaderButton("Alertas"); alerts.Click += (_, _) => ShowAlerts(); header.Controls.Add(alerts);
         var billing = HeaderButton("Facturación"); billing.Click += async (_, _) => await ShowBillingAsync(); header.Controls.Add(billing);
+        var metricsButton = HeaderButton("Métricas"); metricsButton.Click += async (_, _) => await ShowMetricsAsync(); header.Controls.Add(metricsButton);
         var refresh = HeaderButton("Actualizar"); refresh.Click += async (_, _) => await LoadAsync(); header.Controls.Add(refresh);
         var metrics = new Panel { Dock = DockStyle.Top, Height = 65, Padding = new Padding(24, 10, 24, 8), BackColor = Color.White }; metrics.Controls.Add(summary);
         ConfigureGrid();
@@ -131,6 +132,51 @@ internal sealed class MainForm : Form
         var list = new ListBox { Dock = DockStyle.Fill, Font = new Font("Segoe UI", 11), IntegralHeight = false };
         list.Items.AddRange((alerts.Count == 0 ? ["No hay alertas comerciales activas."] : alerts).Cast<object>().ToArray()); dialog.Controls.Add(list); dialog.ShowDialog(this);
     }
+    private async Task ShowMetricsAsync()
+    {
+        try
+        {
+            using HttpClient http = PlatformAuth.Client.CreateHttpClient();
+            List<PlatformPayment> payments = await http.GetFromJsonAsync<List<PlatformPayment>>($"{PlatformAuth.ServerUrl}/api/platform/billing/history") ?? [];
+            List<PlatformPayment> approved = payments.Where(x => x.Status == "approved").ToList();
+            DateTime monthStart = new(DateTime.Today.Year, DateTime.Today.Month, 1);
+            decimal monthlyRevenue = approved.Where(x => x.OccurredAt.LocalDateTime >= monthStart).Sum(x => x.AmountArs);
+            int active = organizations.Count(x => x.AccessStatus is "Active" or "PastDue"), canceled = organizations.Count(x => x.AccessStatus is "Canceled" or "Expired" or "Suspended");
+            decimal cancellationRate = organizations.Count == 0 ? 0 : decimal.Round(canceled * 100m / organizations.Count, 1);
+            var months = Enumerable.Range(0, 6).Select(offset => monthStart.AddMonths(-5 + offset)).Select(start => new MetricRow { Label = start.ToString("MMMM yyyy"), Value = approved.Where(x => x.OccurredAt.LocalDateTime >= start && x.OccurredAt.LocalDateTime < start.AddMonths(1)).Sum(x => x.AmountArs) }).ToList();
+            var plans = organizations.GroupBy(x => x.PlanName).Select(x => new MetricRow { Label = x.Key, Value = x.Count() }).OrderByDescending(x => x.Value).ToList();
+            var upcoming = organizations.Where(x => x.AccessEndsAt.HasValue && x.AccessEndsAt.Value >= DateTimeOffset.UtcNow).OrderBy(x => x.AccessEndsAt).Take(20).Select(x => new ExpirationRow { Organization = x.OrganizationName, Plan = x.PlanName, Date = x.AccessEndsAt!.Value.ToLocalTime().ToString("dd/MM/yyyy"), Days = Math.Max(0, (int)Math.Ceiling((x.AccessEndsAt.Value - DateTimeOffset.UtcNow).TotalDays)) }).ToList();
+            using var dialog = new Form { Text = "Métricas comerciales de ARES", Width = 1120, Height = 720, StartPosition = FormStartPosition.CenterParent, BackColor = Color.FromArgb(241, 245, 249) };
+            var cards = new TableLayoutPanel { Dock = DockStyle.Top, Height = 112, ColumnCount = 5, Padding = new Padding(14) }; for (int i = 0; i < 5; i++) cards.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 20));
+            cards.Controls.Add(MetricCard("Ingresos del mes", $"ARS {monthlyRevenue:N2}"), 0, 0); cards.Controls.Add(MetricCard("Clientes activos", active.ToString()), 1, 0); cards.Controls.Add(MetricCard("Cancelados/vencidos", canceled.ToString()), 2, 0); cards.Controls.Add(MetricCard("Cancelación", $"{cancellationRate:N1}%"), 3, 0); cards.Controls.Add(MetricCard("Equipos licenciados", organizations.Sum(x => x.TotalDevices).ToString()), 4, 0);
+            var tabs = new TabControl { Dock = DockStyle.Fill };
+            tabs.TabPages.Add(GridTab("Ingresos mensuales", months, ("Mes", nameof(MetricRow.Label)), ("Ingresos ARS", nameof(MetricRow.ValueText))));
+            tabs.TabPages.Add(GridTab("Planes contratados", plans, ("Plan", nameof(MetricRow.Label)), ("Organizaciones", nameof(MetricRow.ValueText))));
+            tabs.TabPages.Add(GridTab("Próximos vencimientos", upcoming, ("Organización", nameof(ExpirationRow.Organization)), ("Plan", nameof(ExpirationRow.Plan)), ("Vencimiento", nameof(ExpirationRow.Date)), ("Días restantes", nameof(ExpirationRow.Days))));
+            var export = ActionButton("Exportar informe CSV", Color.FromArgb(2, 132, 199)); export.Width = 190; export.Click += (_, _) => ExportMetrics(approved, months, upcoming);
+            var footer = new FlowLayoutPanel { Dock = DockStyle.Bottom, Height = 58, FlowDirection = FlowDirection.RightToLeft, Padding = new Padding(12), BackColor = Color.White, Controls = { export } };
+            dialog.Controls.Add(tabs); dialog.Controls.Add(footer); dialog.Controls.Add(cards); dialog.ShowDialog(this);
+        }
+        catch (Exception ex) { MessageBox.Show(ex.Message, "Métricas", MessageBoxButtons.OK, MessageBoxIcon.Error); }
+    }
+    private static Control MetricCard(string title, string value)
+    {
+        var panel = new Panel { Dock = DockStyle.Fill, BackColor = Color.White, Margin = new Padding(5), Padding = new Padding(12) };
+        panel.Controls.Add(new Label { Text = value, Dock = DockStyle.Fill, Font = new Font("Segoe UI", 17, FontStyle.Bold), ForeColor = Color.FromArgb(30, 64, 175), TextAlign = ContentAlignment.BottomLeft }); panel.Controls.Add(new Label { Text = title, Dock = DockStyle.Top, Height = 24, ForeColor = Color.FromArgb(71, 85, 105) }); return panel;
+    }
+    private static TabPage GridTab(string title, object data, params (string Header, string Property)[] columns)
+    {
+        var tab = new TabPage(title); var table = new DataGridView { Dock = DockStyle.Fill, ReadOnly = true, AutoGenerateColumns = false, AllowUserToAddRows = false, RowHeadersVisible = false, BackgroundColor = Color.White, AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill, DataSource = data };
+        foreach (var column in columns) table.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = column.Header, DataPropertyName = column.Property }); tab.Controls.Add(table); return tab;
+    }
+    private void ExportMetrics(List<PlatformPayment> approved, List<MetricRow> months, List<ExpirationRow> upcoming)
+    {
+        using var dialog = new SaveFileDialog { Filter = "Archivo CSV (*.csv)|*.csv", FileName = $"ARES-Informe-{DateTime.Now:yyyy-MM-dd}.csv" }; if (dialog.ShowDialog(this) != DialogResult.OK) return;
+        static string Csv(object? value) => $"\"{Convert.ToString(value)?.Replace("\"", "\"\"")}\"";
+        var lines = new List<string> { "RESUMEN ARES", $"Generado,{DateTime.Now:dd/MM/yyyy HH:mm}", $"Organizaciones,{organizations.Count}", $"Equipos licenciados,{organizations.Sum(x => x.TotalDevices)}", $"Usuarios licenciados,{organizations.Sum(x => x.TotalPanelUsers)}", "", "INGRESOS MENSUALES", "Mes,Importe ARS" };
+        lines.AddRange(months.Select(x => $"{Csv(x.Label)},{x.Value.ToString(System.Globalization.CultureInfo.InvariantCulture)}")); lines.AddRange(["", "PAGOS APROBADOS", "Fecha,Organización,Operación,Plan,Importe ARS"]); lines.AddRange(approved.Select(x => $"{x.OccurredAt.LocalDateTime:dd/MM/yyyy HH:mm},{Csv(x.OrganizationName)},{Csv(x.ProviderPaymentId)},{Csv(x.PlanName)},{x.AmountArs.ToString(System.Globalization.CultureInfo.InvariantCulture)}")); lines.AddRange(["", "PRÓXIMOS VENCIMIENTOS", "Organización,Plan,Fecha,Días restantes"]); lines.AddRange(upcoming.Select(x => $"{Csv(x.Organization)},{Csv(x.Plan)},{x.Date},{x.Days}"));
+        File.WriteAllLines(dialog.FileName, lines, new System.Text.UTF8Encoding(true)); MessageBox.Show("Informe exportado correctamente.", "ARES", MessageBoxButtons.OK, MessageBoxIcon.Information);
+    }
     private static bool IsAlert(OrganizationLicense x) => AlertMessages(x).Any();
     private static IEnumerable<string> AlertMessages(OrganizationLicense x)
     {
@@ -159,3 +205,5 @@ internal sealed class PlatformPayment
     public string OrganizationName { get; set; } = ""; public string ProviderPaymentId { get; set; } = ""; public string Plan { get; set; } = ""; public decimal AmountArs { get; set; } public string Status { get; set; } = ""; public DateTimeOffset? PeriodStart { get; set; } public DateTimeOffset? PeriodEnd { get; set; } public string ReceiptUrl { get; set; } = ""; public DateTimeOffset OccurredAt { get; set; }
     public string DateText => OccurredAt.ToLocalTime().ToString("dd/MM/yyyy HH:mm"); public string PlanName => Plan switch { "Basic" => "Esencial", "Professional" => "Profesional", "Business" => "Empresa", "Enterprise" => "Corporativo", _ => Plan }; public string AmountText => $"ARS {AmountArs:N2}"; public string StatusName => Status switch { "approved" => "Aprobado", "pending" => "Pendiente", "in_process" => "En proceso", "rejected" => "Rechazado", _ => Status }; public string PeriodText => PeriodStart.HasValue ? $"{PeriodStart.Value.ToLocalTime():dd/MM/yyyy}{(PeriodEnd.HasValue ? $" al {PeriodEnd.Value.ToLocalTime():dd/MM/yyyy}" : "")}" : "—";
 }
+internal sealed class MetricRow { public string Label { get; set; } = ""; public decimal Value { get; set; } public string ValueText => Value.ToString("N2"); }
+internal sealed class ExpirationRow { public string Organization { get; set; } = ""; public string Plan { get; set; } = ""; public string Date { get; set; } = ""; public int Days { get; set; } }

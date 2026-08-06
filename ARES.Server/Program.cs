@@ -248,7 +248,8 @@ app.MapGet("/api/license", async (HttpContext context) =>
 app.MapGet("/api/billing", async (HttpContext context, CancellationToken cancellationToken) =>
 {
     BillingSubscription? subscription = await persistence.GetBillingSubscriptionAsync(CurrentOrganization(context));
-    if (subscription is not null && subscription.Status == "pending")
+    if (subscription is not null && (subscription.Status == "pending" ||
+        (subscription.Status is "cancelled" or "canceled" && !subscription.PaidUntil.HasValue)))
         subscription = await ReconcileBillingAsync(subscription, mercadoPago, persistence, cancellationToken);
     return Results.Json(new { configured = mercadoPago.IsConfigured, usdArsRate = mercadoPago.UsdArsRate, subscription });
 });
@@ -1332,21 +1333,25 @@ bool CanAccess(string role, string method, PathString path)
 async Task<BillingSubscription> ReconcileBillingAsync(BillingSubscription stored, MercadoPagoService provider,
     AresPersistence database, CancellationToken cancellationToken)
 {
-    MercadoPagoSubscription? remote = await provider.FindSubscriptionByPlanAsync(stored.ProviderSubscriptionId, cancellationToken);
+    bool cancellationRequested = stored.Status is "cancelled" or "canceled";
+    MercadoPagoSubscription? remote = await provider.GetSubscriptionAsync(stored.ProviderSubscriptionId, cancellationToken);
+    remote ??= await provider.FindSubscriptionByPlanAsync(stored.ProviderSubscriptionId, cancellationToken);
     if (remote is null || string.IsNullOrWhiteSpace(remote.Id)) return stored;
 
     MercadoPagoAuthorizedPayment? payment = await provider.FindLatestAuthorizedPaymentAsync(remote.Id, cancellationToken);
     bool approved = payment?.PaymentStatus == "approved";
     DateTimeOffset? paidUntil = approved ? (payment?.DebitDate ?? DateTimeOffset.UtcNow).AddMonths(1) : stored.PaidUntil;
+    if (cancellationRequested) await provider.CancelSubscriptionAsync(remote.Id, cancellationToken);
     var updated = stored with
     {
         ProviderSubscriptionId = remote.Id,
-        Status = approved ? "authorized" : remote.Status,
+        Status = cancellationRequested ? "cancelled" : approved ? "authorized" : remote.Status,
         LastPaymentStatus = payment?.PaymentStatus ?? stored.LastPaymentStatus,
         PaidUntil = paidUntil
     };
     await database.UpsertBillingSubscriptionAsync(updated);
-    await provider.CancelSubscriptionOrPlanAsync(stored.ProviderSubscriptionId, cancellationToken);
+    if (!string.IsNullOrWhiteSpace(remote.PlanId))
+        await provider.CancelSubscriptionOrPlanAsync(remote.PlanId, cancellationToken);
 
     if (approved)
     {

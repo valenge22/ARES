@@ -196,7 +196,7 @@ app.MapGet("/health", () => Results.Ok(new
     ,billing = mercadoPago.IsConfigured ? "mercadopago" : "not-configured"
 }));
 
-app.MapGet("/", () => Results.Redirect("/portal"));
+app.MapGet("/", () => Results.File(Path.Combine(app.Environment.ContentRootPath, "wwwroot", "index.html"), "text/html; charset=utf-8"));
 app.MapGet("/portal", () => Results.File(Path.Combine(app.Environment.ContentRootPath, "wwwroot", "portal.html"), "text/html; charset=utf-8"));
 app.MapGet("/admin-ares", () => Results.File(Path.Combine(app.Environment.ContentRootPath, "wwwroot", "admin-ares.html"), "text/html; charset=utf-8"));
 app.MapGet("/admin-mfa.js", (HttpContext context) =>

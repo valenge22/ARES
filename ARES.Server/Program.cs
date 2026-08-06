@@ -255,27 +255,24 @@ app.MapPost("/api/billing/checkout", async (BillingCheckoutRequest request, Http
     if (!IsOwner(context)) return Results.Forbid();
     if (!mercadoPago.IsConfigured) return Results.BadRequest(new { error = "Mercado Pago todavía no está configurado." });
     string plan = NormalizePlan(request.Plan); if (plan is "" or "Trial") return Results.BadRequest(new { error = "Elegí un plan pago válido." });
-    string payerEmail = CurrentAdmin(context).Email.Trim();
-    if (payerEmail.Length is < 5 or > 320 || !payerEmail.Contains('@'))
-        return Results.BadRequest(new { error = "Tu cuenta ARES no tiene un correo válido para iniciar el pago." });
     if (request.AdditionalDevices is < 0 or > 100000 || request.AdditionalPanelUsers is < 0 or > 10000)
         return Results.BadRequest(new { error = "Los adicionales no son válidos." });
     BillingSubscription? existing = await persistence.GetBillingSubscriptionAsync(CurrentOrganization(context));
     if (existing is not null && existing.Status == "authorized")
         return Results.BadRequest(new { error = "Ya existe una suscripción activa. La modificación de planes se habilitará desde Administrar suscripción." });
     if (existing is not null && existing.Status == "pending" && !string.IsNullOrWhiteSpace(existing.ProviderSubscriptionId))
-        await mercadoPago.CancelSubscriptionAsync(existing.ProviderSubscriptionId, cancellationToken);
+        await mercadoPago.CancelSubscriptionOrPlanAsync(existing.ProviderSubscriptionId, cancellationToken);
     PlanDefinition definition = PlanDetails(plan);
     decimal usd = definition.MonthlyPriceUsd + request.AdditionalDevices * definition.AdditionalDeviceUsd + request.AdditionalPanelUsers * definition.AdditionalPanelUserUsd;
     decimal ars = decimal.Round(usd * mercadoPago.UsdArsRate, 2);
     string origin = $"{context.Request.Scheme}://{context.Request.Host}";
-    MercadoPagoCreateResult creation = await mercadoPago.CreateSubscriptionAsync(CurrentOrganization(context), payerEmail,
-        $"ARES {definition.DisplayName}", ars, $"{origin}/portal", $"{origin}/api/billing/mercadopago/webhook?source_news=webhooks", cancellationToken);
+    MercadoPagoCreateResult creation = await mercadoPago.CreateSubscriptionPlanAsync(CurrentOrganization(context),
+        $"ARES {definition.DisplayName}", ars, $"{origin}/portal", cancellationToken);
     MercadoPagoSubscription? created = creation.Subscription;
     if (created is null || string.IsNullOrWhiteSpace(created.CheckoutUrl))
         return Results.BadRequest(new { error = string.IsNullOrWhiteSpace(creation.Error) ? "Mercado Pago no pudo crear la suscripción." : creation.Error });
     await persistence.UpsertBillingSubscriptionAsync(new(CurrentOrganization(context), created.Id, plan, request.AdditionalDevices,
-        request.AdditionalPanelUsers, ars, created.Status, "", null));
+        request.AdditionalPanelUsers, ars, "pending", "", null));
     return Results.Ok(new { checkoutUrl = created.CheckoutUrl, amountUsd = usd, amountArs = ars });
 });
 app.MapPost("/api/billing/cancel", async (HttpContext context, CancellationToken cancellationToken) =>
@@ -283,7 +280,7 @@ app.MapPost("/api/billing/cancel", async (HttpContext context, CancellationToken
     if (!IsOwner(context)) return Results.Forbid();
     BillingSubscription? subscription = await persistence.GetBillingSubscriptionAsync(CurrentOrganization(context));
     if (subscription is null || string.IsNullOrWhiteSpace(subscription.ProviderSubscriptionId)) return Results.NotFound();
-    bool canceledRemotely = await mercadoPago.CancelSubscriptionAsync(subscription.ProviderSubscriptionId, cancellationToken);
+    bool canceledRemotely = await mercadoPago.CancelSubscriptionOrPlanAsync(subscription.ProviderSubscriptionId, cancellationToken);
     if (!canceledRemotely && subscription.Status == "authorized")
         return Results.BadRequest(new { error = "Mercado Pago no pudo cancelar la suscripción activa." });
     await persistence.UpsertBillingSubscriptionAsync(subscription with { Status = "cancelled" });
@@ -302,13 +299,22 @@ app.MapPost("/api/billing/mercadopago/webhook", async (HttpContext context, Json
         (payload.TryGetProperty("data", out JsonElement data) && data.TryGetProperty("id", out JsonElement idValue) ? idValue.ToString() : "");
     string type = context.Request.Query["type"].FirstOrDefault() ?? (payload.TryGetProperty("type", out JsonElement typeValue) ? typeValue.GetString() ?? "" : "");
     string requestId = context.Request.Headers["x-request-id"].ToString(); string signature = context.Request.Headers["x-signature"].ToString();
-    if (string.IsNullOrWhiteSpace(dataId) || !mercadoPago.ValidateWebhook(dataId, requestId, signature)) return Results.Unauthorized();
+    if (string.IsNullOrWhiteSpace(dataId)) return Results.BadRequest();
+    if (type != "subscription_authorized_payment" && !mercadoPago.ValidateWebhook(dataId, requestId, signature)) return Results.Unauthorized();
     if (type == "subscription_preapproval")
     {
         MercadoPagoSubscription? remote = await mercadoPago.GetSubscriptionAsync(dataId, cancellationToken);
-        if (remote is null || !Guid.TryParse(remote.ExternalReference, out Guid organizationId)) return Results.Ok();
-        BillingSubscription? stored = await persistence.GetBillingSubscriptionByProviderIdAsync(remote.Id); if (stored is null || stored.OrganizationId != organizationId) return Results.Ok();
-        await persistence.UpsertBillingSubscriptionAsync(stored with { Status = remote.Status });
+        if (remote is null) return Results.Ok();
+        BillingSubscription? stored = await persistence.GetBillingSubscriptionByProviderIdAsync(remote.Id);
+        if (stored is null && !string.IsNullOrWhiteSpace(remote.PlanId))
+            stored = await persistence.GetBillingSubscriptionByProviderIdAsync(remote.PlanId);
+        if (stored is null && Guid.TryParse(remote.ExternalReference, out Guid referencedOrganization))
+            stored = await persistence.GetBillingSubscriptionAsync(referencedOrganization);
+        if (stored is null) return Results.Ok();
+        Guid organizationId = stored.OrganizationId;
+        await persistence.UpsertBillingSubscriptionAsync(stored with { ProviderSubscriptionId = remote.Id, Status = remote.Status });
+        if (!string.IsNullOrWhiteSpace(remote.PlanId))
+            await mercadoPago.CancelSubscriptionOrPlanAsync(remote.PlanId, cancellationToken);
         if (remote.Status is "cancelled" or "canceled" && !stored.PaidUntil.HasValue)
             await persistence.UpdateLicenseAsync(organizationId, stored.RequestedPlan, "Canceled", PlanDetails(stored.RequestedPlan).IncludedDevices,
                 stored.AdditionalDevices, PlanDetails(stored.RequestedPlan).IncludedPanelUsers, stored.AdditionalPanelUsers, 0, null, 3);

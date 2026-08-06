@@ -22,19 +22,16 @@ internal sealed class MercadoPagoService
         if (!string.IsNullOrWhiteSpace(accessToken)) http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
     }
 
-    public async Task<MercadoPagoCreateResult> CreateSubscriptionAsync(Guid organizationId, string email, string description,
-        decimal amountArs, string returnUrl, string notificationUrl, CancellationToken cancellationToken)
+    public async Task<MercadoPagoCreateResult> CreateSubscriptionPlanAsync(Guid organizationId, string description,
+        decimal amountArs, string returnUrl, CancellationToken cancellationToken)
     {
         if (!IsConfigured) return new(null, "Mercado Pago no está configurado.");
-        using HttpResponseMessage response = await http.PostAsJsonAsync("/preapproval", new
+        using HttpResponseMessage response = await http.PostAsJsonAsync("/preapproval_plan", new
         {
             reason = description,
             external_reference = organizationId.ToString("D"),
-            payer_email = email,
             back_url = returnUrl,
-            notification_url = notificationUrl,
-            auto_recurring = new { frequency = 1, frequency_type = "months", transaction_amount = decimal.Round(amountArs, 2), currency_id = "ARS" },
-            status = "pending"
+            auto_recurring = new { frequency = 1, frequency_type = "months", transaction_amount = decimal.Round(amountArs, 2), currency_id = "ARS" }
         }, cancellationToken);
         if (response.IsSuccessStatusCode)
             return new(await ReadSubscriptionAsync(response, cancellationToken), "");
@@ -52,6 +49,17 @@ internal sealed class MercadoPagoService
         if (!IsConfigured || string.IsNullOrWhiteSpace(id)) return false;
         using var request = new HttpRequestMessage(HttpMethod.Put, $"/preapproval/{Uri.EscapeDataString(id)}") { Content = JsonContent.Create(new { status = "canceled" }) };
         using HttpResponseMessage response = await http.SendAsync(request, cancellationToken); return response.IsSuccessStatusCode;
+    }
+
+    public async Task<bool> CancelSubscriptionOrPlanAsync(string id, CancellationToken cancellationToken)
+    {
+        if (await CancelSubscriptionAsync(id, cancellationToken)) return true;
+        using var request = new HttpRequestMessage(HttpMethod.Put, $"/preapproval_plan/{Uri.EscapeDataString(id)}")
+        {
+            Content = JsonContent.Create(new { status = "canceled" })
+        };
+        using HttpResponseMessage response = await http.SendAsync(request, cancellationToken);
+        return response.IsSuccessStatusCode;
     }
 
     public async Task<MercadoPagoAuthorizedPayment?> GetAuthorizedPaymentAsync(string id, CancellationToken cancellationToken)
@@ -84,7 +92,8 @@ internal sealed class MercadoPagoService
         return new(root.TryGetProperty("id", out JsonElement id) ? id.GetString() ?? "" : "",
             root.TryGetProperty("status", out JsonElement status) ? status.GetString() ?? "" : "",
             root.TryGetProperty("external_reference", out JsonElement reference) ? reference.GetString() ?? "" : "",
-            root.TryGetProperty("init_point", out JsonElement point) ? point.GetString() ?? "" : "", amount);
+            root.TryGetProperty("init_point", out JsonElement point) ? point.GetString() ?? "" : "", amount,
+            root.TryGetProperty("preapproval_plan_id", out JsonElement plan) ? plan.GetString() ?? "" : "");
     }
 
     private static async Task<string> ReadApiErrorAsync(HttpResponseMessage response, CancellationToken cancellationToken)
@@ -117,6 +126,6 @@ internal sealed class MercadoPagoService
 }
 
 internal sealed record MercadoPagoCreateResult(MercadoPagoSubscription? Subscription, string Error);
-internal sealed record MercadoPagoSubscription(string Id, string Status, string ExternalReference, string CheckoutUrl, decimal AmountArs);
+internal sealed record MercadoPagoSubscription(string Id, string Status, string ExternalReference, string CheckoutUrl, decimal AmountArs, string PlanId);
 internal sealed record MercadoPagoAuthorizedPayment(string SubscriptionId, string PaymentStatus, DateTimeOffset? DebitDate);
 internal sealed record BillingCheckoutRequest(string Plan, int AdditionalDevices, int AdditionalPanelUsers);

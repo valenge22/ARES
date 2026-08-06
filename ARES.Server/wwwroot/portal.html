@@ -34,6 +34,7 @@
     </main>
   </div>
 <script>
+if(location.hash&&new URLSearchParams(location.hash.substring(1)).get('type')==='recovery')location.replace('/auth/reset'+location.hash);
 let auth=JSON.parse(localStorage.getItem('ares.portal.auth')||'null'),me=null,organization=null,agents=[],groups=[],licenseData=null;
 const roleName=r=>({Owner:'Propietario',Administrator:'Administrador',Operator:'Operador',Viewer:'Solo lectura'}[r]||r);
 const asArray=x=>Array.isArray(x)?x:(x?.$values||x?.items||x?.all||[]);

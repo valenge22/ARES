@@ -396,7 +396,11 @@ app.MapPost("/api/auth/register", async (RegisterRequest request, HttpRequest ht
 
 app.MapPost("/api/auth/recover", async (RecoverRequest request, HttpRequest httpRequest, CancellationToken cancellationToken) =>
 {
-    string origin = $"{httpRequest.Scheme}://{httpRequest.Host}";
+    string configuredOrigin = builder.Configuration["ARES_PUBLIC_URL"] ?? Environment.GetEnvironmentVariable("ARES_PUBLIC_URL") ?? "";
+    string forwardedScheme = httpRequest.Headers["X-Forwarded-Proto"].FirstOrDefault() ?? httpRequest.Scheme;
+    string origin = string.IsNullOrWhiteSpace(configuredOrigin)
+        ? $"{forwardedScheme}://{httpRequest.Host}"
+        : configuredOrigin.TrimEnd('/');
     await authService.RecoverAsync(request.Email.Trim(), $"{origin}/auth/reset", cancellationToken);
     return Results.Ok(new { sent = true });
 });

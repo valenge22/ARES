@@ -135,9 +135,12 @@ internal sealed class MercadoPagoService
 
     private static MercadoPagoAuthorizedPayment ReadAuthorizedPayment(JsonElement root)
     {
-        string paymentStatus = root.TryGetProperty("payment", out JsonElement payment) && payment.TryGetProperty("status", out JsonElement status) ? status.GetString() ?? "" : "";
+        JsonElement payment = root.TryGetProperty("payment", out JsonElement paymentValue) ? paymentValue : default;
+        string paymentStatus = payment.ValueKind == JsonValueKind.Object && payment.TryGetProperty("status", out JsonElement status) ? status.GetString() ?? "" : "";
+        string paymentId = payment.ValueKind == JsonValueKind.Object && payment.TryGetProperty("id", out JsonElement id) ? id.ToString() :
+            root.TryGetProperty("id", out JsonElement authorizedId) ? authorizedId.ToString() : "";
         DateTimeOffset? debitDate = root.TryGetProperty("debit_date", out JsonElement date) && DateTimeOffset.TryParse(date.GetString(), out DateTimeOffset parsed) ? parsed : null;
-        return new(root.TryGetProperty("preapproval_id", out JsonElement subscription) ? subscription.GetString() ?? "" : "", paymentStatus, debitDate);
+        return new(paymentId, root.TryGetProperty("preapproval_id", out JsonElement subscription) ? subscription.GetString() ?? "" : "", paymentStatus, debitDate);
     }
 
     private static async Task<string> ReadApiErrorAsync(HttpResponseMessage response, CancellationToken cancellationToken)
@@ -171,6 +174,6 @@ internal sealed class MercadoPagoService
 
 internal sealed record MercadoPagoCreateResult(MercadoPagoSubscription? Subscription, string Error);
 internal sealed record MercadoPagoSubscription(string Id, string Status, string ExternalReference, string CheckoutUrl, decimal AmountArs, string PlanId);
-internal sealed record MercadoPagoAuthorizedPayment(string SubscriptionId, string PaymentStatus, DateTimeOffset? DebitDate);
+internal sealed record MercadoPagoAuthorizedPayment(string PaymentId, string SubscriptionId, string PaymentStatus, DateTimeOffset? DebitDate);
 internal sealed record BillingCheckoutRequest(string Plan, int AdditionalDevices, int AdditionalPanelUsers);
 internal sealed record BillingPaymentReconcileRequest(string PaymentId);

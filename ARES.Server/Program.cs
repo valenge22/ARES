@@ -280,6 +280,22 @@ app.MapGet("/api/billing", async (HttpContext context, CancellationToken cancell
         subscription = await ReconcileBillingAsync(subscription, mercadoPago, persistence, cancellationToken);
     return Results.Json(new { configured = mercadoPago.IsConfigured, usdArsRate = mercadoPago.UsdArsRate, subscription });
 });
+app.MapGet("/api/billing/history", async (HttpContext context, CancellationToken cancellationToken) =>
+{
+    if (!IsOwner(context)) return Results.Forbid();
+    Guid organizationId = CurrentOrganization(context);
+    List<BillingPayment> payments = await persistence.GetBillingPaymentsAsync(organizationId);
+    if (payments.Count == 0)
+    {
+        BillingSubscription? subscription = await persistence.GetBillingSubscriptionAsync(organizationId);
+        if (subscription is not null && mercadoPago.IsConfigured)
+        {
+            await ReconcileBillingAsync(subscription, mercadoPago, persistence, cancellationToken);
+            payments = await persistence.GetBillingPaymentsAsync(organizationId);
+        }
+    }
+    return Results.Ok(payments);
+});
 app.MapPost("/api/billing/checkout", async (BillingCheckoutRequest request, HttpContext context, CancellationToken cancellationToken) =>
 {
     if (!IsOwner(context)) return Results.Forbid();
@@ -1411,6 +1427,10 @@ async Task<BillingSubscription> ReconcileBillingAsync(BillingSubscription stored
         PaidUntil = paidUntil
     };
     await database.UpsertBillingSubscriptionAsync(updated);
+    if (payment is not null && !string.IsNullOrWhiteSpace(payment.PaymentId))
+        await database.UpsertBillingPaymentAsync(new(Guid.NewGuid(), stored.OrganizationId, payment.PaymentId, remote.Id,
+            stored.RequestedPlan, stored.AmountArs, payment.PaymentStatus, payment.DebitDate, approved ? paidUntil : null,
+            $"https://www.mercadopago.com.ar/activities/detail/{Uri.EscapeDataString(payment.PaymentId)}", payment.DebitDate ?? DateTimeOffset.UtcNow));
     if (!string.IsNullOrWhiteSpace(remote.PlanId))
         await provider.CancelSubscriptionOrPlanAsync(remote.PlanId, cancellationToken);
 
@@ -1442,6 +1462,11 @@ async Task<BillingSubscription> ApplyAuthorizedPaymentAsync(BillingSubscription 
         PaidUntil = paidUntil
     };
     await database.UpsertBillingSubscriptionAsync(updated);
+    if (!string.IsNullOrWhiteSpace(payment.PaymentId))
+        await database.UpsertBillingPaymentAsync(new(Guid.NewGuid(), stored.OrganizationId, payment.PaymentId, remote.Id,
+            stored.RequestedPlan, stored.AmountArs, payment.PaymentStatus, payment.DebitDate,
+            payment.PaymentStatus == "approved" ? paidUntil : null,
+            $"https://www.mercadopago.com.ar/activities/detail/{Uri.EscapeDataString(payment.PaymentId)}", payment.DebitDate ?? DateTimeOffset.UtcNow));
     if (payment.PaymentStatus == "approved")
     {
         PlanDefinition definition = PlanDetails(stored.RequestedPlan);

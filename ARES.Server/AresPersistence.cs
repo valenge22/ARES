@@ -222,6 +222,22 @@ internal sealed class AresPersistence
                 created_at timestamptz not null default now(),
                 updated_at timestamptz not null default now()
             );
+            create table if not exists ares_billing_payments (
+                payment_id uuid primary key,
+                organization_id uuid not null,
+                provider varchar(30) not null default 'MercadoPago',
+                provider_payment_id varchar(100) not null,
+                provider_subscription_id varchar(100),
+                plan varchar(30) not null,
+                amount_ars numeric(12,2) not null,
+                status varchar(30) not null,
+                period_start timestamptz,
+                period_end timestamptz,
+                receipt_url text,
+                occurred_at timestamptz not null default now(),
+                updated_at timestamptz not null default now(),
+                unique(provider,provider_payment_id)
+            );
 
             alter table ares_state enable row level security;
             alter table ares_admin_users enable row level security;
@@ -234,6 +250,7 @@ internal sealed class AresPersistence
             alter table ares_login_events enable row level security;
             alter table ares_mfa_recovery_codes enable row level security;
             alter table ares_billing_subscriptions enable row level security;
+            alter table ares_billing_payments enable row level security;
 
             revoke all on table ares_state from anon, authenticated;
             revoke all on table ares_admin_users from anon, authenticated;
@@ -246,6 +263,7 @@ internal sealed class AresPersistence
             revoke all on table ares_login_events from anon, authenticated;
             revoke all on table ares_mfa_recovery_codes from anon, authenticated;
             revoke all on table ares_billing_subscriptions from anon, authenticated;
+            revoke all on table ares_billing_payments from anon, authenticated;
             """;
         await command.ExecuteNonQueryAsync();
     }
@@ -330,6 +348,39 @@ internal sealed class AresPersistence
     }
 
     private static BillingSubscription ReadBilling(NpgsqlDataReader reader) => new(reader.GetGuid(0), reader.GetString(1), reader.GetString(2), reader.GetInt32(3), reader.GetInt32(4), reader.GetDecimal(5), reader.GetString(6), reader.GetString(7), reader.IsDBNull(8) ? null : reader.GetFieldValue<DateTimeOffset>(8));
+
+    public async Task UpsertBillingPaymentAsync(BillingPayment payment)
+    {
+        if (string.IsNullOrWhiteSpace(payment.ProviderPaymentId)) return;
+        await using var connection = new NpgsqlConnection(connectionString); await connection.OpenAsync();
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            insert into ares_billing_payments(payment_id,organization_id,provider_payment_id,provider_subscription_id,plan,amount_ars,status,period_start,period_end,receipt_url,occurred_at)
+            values(@id,@organization,@providerPayment,@providerSubscription,@plan,@amount,@status,@periodStart,@periodEnd,@receipt,@occurred)
+            on conflict(provider,provider_payment_id) do update set status=excluded.status,period_start=excluded.period_start,
+                period_end=excluded.period_end,receipt_url=excluded.receipt_url,updated_at=now()
+            """;
+        command.Parameters.AddWithValue("id", payment.PaymentId); command.Parameters.AddWithValue("organization", payment.OrganizationId);
+        command.Parameters.AddWithValue("providerPayment", payment.ProviderPaymentId);
+        command.Parameters.Add(new NpgsqlParameter("providerSubscription", NpgsqlDbType.Varchar) { Value = string.IsNullOrWhiteSpace(payment.ProviderSubscriptionId) ? DBNull.Value : payment.ProviderSubscriptionId });
+        command.Parameters.AddWithValue("plan", payment.Plan); command.Parameters.AddWithValue("amount", payment.AmountArs);
+        command.Parameters.AddWithValue("status", payment.Status);
+        command.Parameters.Add(new NpgsqlParameter("periodStart", NpgsqlDbType.TimestampTz) { Value = payment.PeriodStart?.ToUniversalTime() ?? (object)DBNull.Value });
+        command.Parameters.Add(new NpgsqlParameter("periodEnd", NpgsqlDbType.TimestampTz) { Value = payment.PeriodEnd?.ToUniversalTime() ?? (object)DBNull.Value });
+        command.Parameters.Add(new NpgsqlParameter("receipt", NpgsqlDbType.Text) { Value = string.IsNullOrWhiteSpace(payment.ReceiptUrl) ? DBNull.Value : payment.ReceiptUrl });
+        command.Parameters.AddWithValue("occurred", payment.OccurredAt.ToUniversalTime()); await command.ExecuteNonQueryAsync();
+    }
+
+    public async Task<List<BillingPayment>> GetBillingPaymentsAsync(Guid organizationId)
+    {
+        var result = new List<BillingPayment>();
+        await using var connection = new NpgsqlConnection(connectionString); await connection.OpenAsync();
+        await using var command = connection.CreateCommand();
+        command.CommandText = "select payment_id,organization_id,provider_payment_id,coalesce(provider_subscription_id,''),plan,amount_ars,status,period_start,period_end,coalesce(receipt_url,''),occurred_at from ares_billing_payments where organization_id=@organization order by occurred_at desc limit 100";
+        command.Parameters.AddWithValue("organization", organizationId); await using var reader = await command.ExecuteReaderAsync();
+        while (await reader.ReadAsync()) result.Add(new(reader.GetGuid(0),reader.GetGuid(1),reader.GetString(2),reader.GetString(3),reader.GetString(4),reader.GetDecimal(5),reader.GetString(6),reader.IsDBNull(7)?null:reader.GetFieldValue<DateTimeOffset>(7),reader.IsDBNull(8)?null:reader.GetFieldValue<DateTimeOffset>(8),reader.GetString(9),reader.GetFieldValue<DateTimeOffset>(10)));
+        return result;
+    }
 
     public async Task EnsureOwnerAsync(string? userId, string? displayName)
     {
@@ -980,6 +1031,9 @@ internal sealed record LicenseInfo(Guid OrganizationId, string OrganizationName,
 internal sealed record AuthSessionInfo(Guid SessionId, string ClientName, string IpAddress, DateTimeOffset CreatedAt, DateTimeOffset LastSeenAt, bool Revoked);
 internal sealed record BillingSubscription(Guid OrganizationId, string ProviderSubscriptionId, string RequestedPlan,
     int AdditionalDevices, int AdditionalPanelUsers, decimal AmountArs, string Status, string LastPaymentStatus, DateTimeOffset? PaidUntil);
+internal sealed record BillingPayment(Guid PaymentId, Guid OrganizationId, string ProviderPaymentId, string ProviderSubscriptionId,
+    string Plan, decimal AmountArs, string Status, DateTimeOffset? PeriodStart, DateTimeOffset? PeriodEnd,
+    string ReceiptUrl, DateTimeOffset OccurredAt);
 internal sealed record LoginEventInfo(string ClientName, string IpAddress, bool Successful, DateTimeOffset OccurredAt);
 internal sealed record RegistrationRequestInfo(Guid UserId, string Email, string DisplayName, string Status, DateTimeOffset RequestedAt, DateTimeOffset? ReviewedAt);
 internal sealed record InvitationInfo(Guid InvitationId, string CodePrefix, int MaxUses, int UsedCount, DateTimeOffset ExpiresAt, bool Revoked, DateTimeOffset CreatedAt);

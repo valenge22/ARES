@@ -256,5 +256,8 @@ internal sealed record UpdateAdminRequest(string Role, bool Enabled);
 internal sealed record CreateInvitationRequest(int MaxUses, int DurationHours, string Role = "Operator");
 internal sealed record CreateDeviceEnrollmentRequest(int MaxUses, int DurationHours, string Group = "General");
 internal sealed record UpdateOrganizationRequest(string Name);
-internal sealed record UpdateLicenseRequest(string Plan, string Status, int MaxDevices, DateTimeOffset? ExpiresAt, int GraceDays);
+internal sealed record UpdateLicenseRequest(string Plan, string Status, int MaxDevices, int MaxPanelUsers,
+    int AdditionalDevices, int AdditionalPanelUsers, DateTimeOffset? ExpiresAt, int GraceDays);
+internal sealed record PlanDefinition(string DisplayName, int IncludedDevices, int IncludedPanelUsers,
+    decimal MonthlyPriceUsd, decimal AdditionalDeviceUsd, decimal AdditionalPanelUserUsd);
 internal sealed record EnrollDeviceRequest(string Code, string DeviceId, string MachineName);

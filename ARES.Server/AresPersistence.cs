@@ -66,11 +66,15 @@ internal sealed class AresPersistence
             alter table ares_organizations add column if not exists onboarding_completed boolean not null default false;
             alter table ares_organizations add column if not exists license_plan varchar(30) not null default 'Trial';
             alter table ares_organizations add column if not exists license_status varchar(20) not null default 'Active';
-            alter table ares_organizations add column if not exists trial_ends_at timestamptz not null default (now() + interval '30 days');
+            alter table ares_organizations add column if not exists trial_ends_at timestamptz not null default (now() + interval '14 days');
             alter table ares_organizations add column if not exists license_expires_at timestamptz;
             alter table ares_organizations add column if not exists license_grace_days integer not null default 3;
             alter table ares_organizations add column if not exists max_devices integer not null default 5;
-            update ares_organizations set license_plan='Enterprise',license_status='Active',license_expires_at=null,max_devices=100000
+            alter table ares_organizations add column if not exists additional_devices integer not null default 0;
+            alter table ares_organizations add column if not exists max_panel_users integer not null default 1;
+            alter table ares_organizations add column if not exists additional_panel_users integer not null default 0;
+            alter table ares_organizations add column if not exists monthly_price_usd numeric(12,2) not null default 0;
+            update ares_organizations set license_plan='Enterprise',license_status='Active',license_expires_at=null,max_devices=100000,max_panel_users=100000,monthly_price_usd=0
             where organization_id='00000000-0000-0000-0000-000000000001';
             update ares_organizations set onboarding_completed=true where organization_id='00000000-0000-0000-0000-000000000001';
 
@@ -365,8 +369,10 @@ internal sealed class AresPersistence
         await using var command = connection.CreateCommand();
         command.CommandText = """
             select o.organization_id,o.name,o.slug,o.license_plan,o.license_status,o.trial_ends_at,
-                   o.license_expires_at,o.license_grace_days,o.max_devices,
-                   (select count(*) from ares_devices d where d.organization_id=o.organization_id and d.enabled=true)
+                   o.license_expires_at,o.license_grace_days,o.max_devices,o.additional_devices,
+                   o.max_panel_users,o.additional_panel_users,o.monthly_price_usd,
+                   (select count(*) from ares_devices d where d.organization_id=o.organization_id and d.enabled=true),
+                   (select count(*) from ares_admin_users u where u.organization_id=o.organization_id and u.enabled=true)
             from ares_organizations o where o.organization_id=@id
             """;
         command.Parameters.AddWithValue("id", organizationId);
@@ -381,8 +387,10 @@ internal sealed class AresPersistence
         await using var command = connection.CreateCommand();
         command.CommandText = """
             select o.organization_id,o.name,o.slug,o.license_plan,o.license_status,o.trial_ends_at,
-                   o.license_expires_at,o.license_grace_days,o.max_devices,
-                   (select count(*) from ares_devices d where d.organization_id=o.organization_id and d.enabled=true)
+                   o.license_expires_at,o.license_grace_days,o.max_devices,o.additional_devices,
+                   o.max_panel_users,o.additional_panel_users,o.monthly_price_usd,
+                   (select count(*) from ares_devices d where d.organization_id=o.organization_id and d.enabled=true),
+                   (select count(*) from ares_admin_users u where u.organization_id=o.organization_id and u.enabled=true)
             from ares_organizations o where o.enabled=true order by o.created_at desc
             """;
         await using var reader = await command.ExecuteReaderAsync();
@@ -390,17 +398,28 @@ internal sealed class AresPersistence
         return result;
     }
 
-    public async Task UpdateLicenseAsync(Guid organizationId, string plan, string status, int maxDevices, DateTimeOffset? expiresAt, int graceDays)
+    public async Task UpdateLicenseAsync(Guid organizationId, string plan, string status, int maxDevices, int additionalDevices,
+        int maxPanelUsers, int additionalPanelUsers, decimal monthlyPriceUsd, DateTimeOffset? expiresAt, int graceDays)
     {
         await using var connection = new NpgsqlConnection(connectionString); await connection.OpenAsync();
         await using var command = connection.CreateCommand();
         command.CommandText = """
             update ares_organizations set license_plan=@plan,license_status=@status,max_devices=@max,
-                license_expires_at=@expires,license_grace_days=@grace,updated_at=now()
-            where organization_id=@id
+                additional_devices=@additionalDevices,max_panel_users=@maxUsers,additional_panel_users=@additionalUsers,
+                monthly_price_usd=@price,license_expires_at=@expires,license_grace_days=@grace,updated_at=now()
+            where organization_id=@id;
+            with ranked as (
+                select user_id,row_number() over(order by case when role='Owner' then 0 else 1 end,created_at,user_id) as position
+                from ares_admin_users where organization_id=@id and enabled=true
+            )
+            update ares_admin_users set enabled=false,updated_at=now()
+            where user_id in (select user_id from ranked where position>@totalUsers)
             """;
         command.Parameters.AddWithValue("id", organizationId); command.Parameters.AddWithValue("plan", plan);
         command.Parameters.AddWithValue("status", status); command.Parameters.AddWithValue("max", maxDevices);
+        command.Parameters.AddWithValue("additionalDevices", additionalDevices); command.Parameters.AddWithValue("maxUsers", maxPanelUsers);
+        command.Parameters.AddWithValue("additionalUsers", additionalPanelUsers); command.Parameters.AddWithValue("price", monthlyPriceUsd);
+        command.Parameters.AddWithValue("totalUsers", maxPanelUsers + additionalPanelUsers);
         command.Parameters.Add(new NpgsqlParameter("expires", NpgsqlTypes.NpgsqlDbType.TimestampTz)
             { Value = expiresAt.HasValue ? expiresAt.Value : DBNull.Value });
         command.Parameters.AddWithValue("grace", graceDays); await command.ExecuteNonQueryAsync();
@@ -498,7 +517,7 @@ internal sealed class AresPersistence
 
     private static LicenseInfo ReadLicense(NpgsqlDataReader reader) => new(reader.GetGuid(0), reader.GetString(1), reader.GetString(2),
         reader.GetString(3), reader.GetString(4), reader.GetFieldValue<DateTimeOffset>(5), reader.IsDBNull(6) ? null : reader.GetFieldValue<DateTimeOffset>(6),
-        reader.GetInt32(7), reader.GetInt32(8), reader.GetInt64(9));
+        reader.GetInt32(7), reader.GetInt32(8), reader.GetInt32(9), reader.GetInt32(10), reader.GetInt32(11), reader.GetDecimal(12), reader.GetInt64(13), reader.GetInt64(14));
 
     public async Task<List<Guid>> GetOrganizationIdsAsync()
     {
@@ -869,7 +888,14 @@ internal sealed record DeviceEnrollmentInfo(Guid EnrollmentId, string CodePrefix
 internal sealed record DeviceEnrollmentGrant(Guid EnrollmentId, Guid OrganizationId, string AssignedGroup);
 internal sealed record DeviceIdentity(Guid OrganizationId, string DeviceId, string AssignedGroup);
 internal sealed record LicenseInfo(Guid OrganizationId, string OrganizationName, string Slug, string Plan, string Status,
-    DateTimeOffset TrialEndsAt, DateTimeOffset? ExpiresAt, int GraceDays, int MaxDevices, long UsedDevices);
+    DateTimeOffset TrialEndsAt, DateTimeOffset? ExpiresAt, int GraceDays, int MaxDevices, int AdditionalDevices,
+    int MaxPanelUsers, int AdditionalPanelUsers, decimal MonthlyPriceUsd, long UsedDevices, long UsedPanelUsers)
+{
+    public int TotalDevices => MaxDevices + AdditionalDevices;
+    public int TotalPanelUsers => MaxPanelUsers + AdditionalPanelUsers;
+    public string PlanName => Plan switch { "Trial" => "Prueba", "Basic" => "Esencial", "Professional" => "Profesional", "Business" => "Empresa", "Enterprise" => "Corporativo", _ => Plan };
+    public string StatusName => Status switch { "Active" => "Activa", "Suspended" => "Suspendida", "Expired" => "Vencida", "Canceled" => "Cancelada", "PastDue" => "Pago pendiente", _ => Status };
+}
 internal sealed record AuthSessionInfo(Guid SessionId, string ClientName, string IpAddress, DateTimeOffset CreatedAt, DateTimeOffset LastSeenAt, bool Revoked);
 internal sealed record LoginEventInfo(string ClientName, string IpAddress, bool Successful, DateTimeOffset OccurredAt);
 internal sealed record RegistrationRequestInfo(Guid UserId, string Email, string DisplayName, string Status, DateTimeOffset RequestedAt, DateTimeOffset? ReviewedAt);

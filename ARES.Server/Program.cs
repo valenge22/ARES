@@ -91,6 +91,7 @@ app.Use(async (context, next) =>
         context.Request.Path.Equals("/portal") ||
         context.Request.Path.Equals("/admin-ares") ||
         context.Request.Path.Equals("/admin-mfa.js") ||
+        context.Request.Path.Equals("/admin-license.js") ||
         context.Request.Path.StartsWithSegments("/health") ||
         context.Request.Path.StartsWithSegments("/solicitar") ||
         context.Request.Path.StartsWithSegments("/auth") ||
@@ -177,6 +178,11 @@ app.MapGet("/admin-mfa.js", (HttpContext context) =>
     context.Response.Headers.CacheControl = "no-store, no-cache, must-revalidate";
     return Results.File(Path.Combine(app.Environment.ContentRootPath, "wwwroot", "admin-mfa.js"), "application/javascript; charset=utf-8");
 });
+app.MapGet("/admin-license.js", (HttpContext context) =>
+{
+    context.Response.Headers.CacheControl = "no-store, no-cache, must-revalidate";
+    return Results.File(Path.Combine(app.Environment.ContentRootPath, "wwwroot", "admin-license.js"), "application/javascript; charset=utf-8");
+});
 
 app.MapPost("/api/auth/login", async (LoginRequest request, HttpContext context, CancellationToken cancellationToken) =>
 {
@@ -235,11 +241,17 @@ app.MapGet("/api/platform/organizations", async (HttpContext context) =>
 app.MapPut("/api/platform/organizations/{id:guid}/license", async (Guid id, UpdateLicenseRequest request, HttpContext context) =>
 {
     if (!IsPlatformAdmin(context)) return Results.Forbid();
-    string plan = request.Plan?.Trim() ?? ""; string status = request.Status?.Trim() ?? "";
-    if (plan is not ("Trial" or "Basic" or "Professional" or "Enterprise") || status is not ("Active" or "Suspended") ||
-        request.MaxDevices is < 1 or > 100000 || request.GraceDays is < 0 or > 30)
+    string plan = NormalizePlan(request.Plan); string status = NormalizeLicenseStatus(request.Status);
+    if (string.IsNullOrEmpty(plan) || string.IsNullOrEmpty(status) || request.AdditionalDevices is < 0 or > 100000 ||
+        request.AdditionalPanelUsers is < 0 or > 10000 || request.GraceDays is < 0 or > 30)
         return Results.BadRequest(new { error = "Configuración de licencia inválida." });
-    await persistence.UpdateLicenseAsync(id, plan, status, request.MaxDevices, request.ExpiresAt, request.GraceDays);
+    PlanDefinition definition = PlanDetails(plan);
+    int includedDevices = plan == "Enterprise" && request.MaxDevices > 0 ? request.MaxDevices : definition.IncludedDevices;
+    int includedUsers = plan == "Enterprise" && request.MaxPanelUsers > 0 ? request.MaxPanelUsers : definition.IncludedPanelUsers;
+    decimal monthlyPrice = definition.MonthlyPriceUsd + request.AdditionalDevices * definition.AdditionalDeviceUsd +
+        request.AdditionalPanelUsers * definition.AdditionalPanelUserUsd;
+    await persistence.UpdateLicenseAsync(id, plan, status, includedDevices, request.AdditionalDevices, includedUsers,
+        request.AdditionalPanelUsers, monthlyPrice, request.ExpiresAt, request.GraceDays);
     return Results.Ok(new { updated = true });
 });
 app.MapDelete("/api/platform/organizations/{id:guid}", async (Guid id, HttpContext context) =>
@@ -429,6 +441,9 @@ app.MapPost("/api/admin/registrations/{id:guid}/approve", async (Guid id, Approv
     if (!IsOwner(context)) return Results.Forbid();
     if (!ValidRole(request.Role) || request.Role == "Owner") return Results.BadRequest(new { error = "Rol inválido." });
     AuthenticatedAdmin admin = CurrentAdmin(context);
+    LicenseInfo? license = await persistence.GetLicenseAsync(admin.OrganizationId);
+    if (license is null || license.UsedPanelUsers >= license.TotalPanelUsers)
+        return Results.Json(new { error = "No hay cupos disponibles para nuevos usuarios del panel." }, statusCode: 402);
     return await persistence.ApproveAsync(id, admin.OrganizationId, request.Role, admin.UserId) ? Results.Ok(new { approved = true }) : Results.NotFound();
 });
 app.MapPost("/api/admin/registrations/{id:guid}/reject", async (Guid id, HttpContext context) =>
@@ -439,7 +454,15 @@ app.MapPut("/api/admin/users/{id:guid}", async (Guid id, UpdateAdminRequest requ
 {
     if (!IsOwner(context)) return Results.Forbid();
     if (!ValidRole(request.Role) || request.Role == "Owner") return Results.BadRequest(new { error = "Rol inválido." });
-    return await persistence.UpdateAdminAsync(id, CurrentAdmin(context).OrganizationId, request.Role, request.Enabled) ? Results.Ok(new { updated = true }) : Results.NotFound();
+    Guid organizationId = CurrentAdmin(context).OrganizationId;
+    AdminUser? target = (await persistence.GetAdminsAsync(organizationId)).FirstOrDefault(x => x.UserId == id);
+    if (request.Enabled && target is not null && !target.Enabled)
+    {
+        LicenseInfo? license = await persistence.GetLicenseAsync(organizationId);
+        if (license is null || license.UsedPanelUsers >= license.TotalPanelUsers)
+            return Results.Json(new { error = "No hay cupos disponibles para reactivar este usuario." }, statusCode: 402);
+    }
+    return await persistence.UpdateAdminAsync(id, organizationId, request.Role, request.Enabled) ? Results.Ok(new { updated = true }) : Results.NotFound();
 });
 app.MapDelete("/api/admin/users/{id:guid}", async (Guid id, HttpContext context) =>
 {
@@ -454,6 +477,10 @@ app.MapPost("/api/admin/invitations", async (CreateInvitationRequest request, Ht
     if (request.MaxUses is < 1 or > 1000 || request.DurationHours is < 1 or > 720)
         return Results.BadRequest(new { error = "Los usos deben ser 1-1000 y la duración 1-720 horas." });
     if (!ValidRole(request.Role) || request.Role == "Owner") return Results.BadRequest(new { error = "Rol inválido." });
+    LicenseInfo? license = await persistence.GetLicenseAsync(CurrentOrganization(context));
+    long availableSeats = (license?.TotalPanelUsers ?? 0) - (license?.UsedPanelUsers ?? 0);
+    if (availableSeats < 1 || request.MaxUses > availableSeats)
+        return Results.Json(new { error = $"La licencia tiene {Math.Max(0, availableSeats)} cupos disponibles para usuarios del panel." }, statusCode: 402);
     string raw = RandomNumberGenerator.GetHexString(12);
     string code = $"ARES-{raw[..4]}-{raw[4..8]}-{raw[8..]}";
     AuthenticatedAdmin admin = CurrentAdmin(context);
@@ -475,8 +502,8 @@ app.MapPost("/api/admin/device-enrollments", async (CreateDeviceEnrollmentReques
     DateTimeOffset? licenseEnd = license?.Plan == "Trial" ? license.TrialEndsAt : license?.ExpiresAt;
     if (license is null || license.Status != "Active" || (licenseEnd.HasValue && DateTimeOffset.UtcNow > licenseEnd.Value.AddDays(license.GraceDays)))
         return Results.Json(new { error = "La licencia está vencida o suspendida." }, statusCode: 402);
-    if (license.UsedDevices >= license.MaxDevices)
-        return Results.Json(new { error = $"Se alcanzó el límite de {license.MaxDevices} equipos de la licencia." }, statusCode: 402);
+    if (license.UsedDevices >= license.TotalDevices)
+        return Results.Json(new { error = $"Se alcanzó el límite de {license.TotalDevices} equipos de la licencia." }, statusCode: 402);
     string requestedGroup = request.Group?.Trim() ?? "";
     if (request.MaxUses is < 1 or > 1000 || request.DurationHours is < 1 or > 720 ||
         !GetPolicies(CurrentOrganization(context)).Any(x => x.Grupo.Equals(requestedGroup, StringComparison.OrdinalIgnoreCase)))
@@ -1196,3 +1223,31 @@ bool CanAccess(string role, string method, PathString path)
          value.EndsWith("/name", StringComparison.OrdinalIgnoreCase) ||
          value.EndsWith("/group", StringComparison.OrdinalIgnoreCase));
 }
+
+string NormalizePlan(string? value) => (value ?? "").Trim().ToLowerInvariant() switch
+{
+    "trial" or "prueba" => "Trial",
+    "basic" or "esencial" => "Basic",
+    "professional" or "profesional" => "Professional",
+    "business" or "empresa" => "Business",
+    "enterprise" or "corporativo" => "Enterprise",
+    _ => ""
+};
+string NormalizeLicenseStatus(string? value) => (value ?? "").Trim().ToLowerInvariant() switch
+{
+    "active" or "activa" => "Active",
+    "suspended" or "suspendida" => "Suspended",
+    "expired" or "vencida" => "Expired",
+    "canceled" or "cancelada" => "Canceled",
+    "pastdue" or "pago pendiente" => "PastDue",
+    _ => ""
+};
+PlanDefinition PlanDetails(string plan) => plan switch
+{
+    "Trial" => new("Prueba", 5, 1, 0m, 0m, 0m),
+    "Basic" => new("Esencial", 10, 2, 25m, 3m, 4m),
+    "Professional" => new("Profesional", 30, 10, 65m, 2.5m, 3m),
+    "Business" => new("Empresa", 100, 25, 149m, 2m, 2m),
+    "Enterprise" => new("Corporativo", 100, 25, 249m, 2m, 2m),
+    _ => new("Prueba", 5, 1, 0m, 0m, 0m)
+};

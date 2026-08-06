@@ -47,6 +47,7 @@ var agents = new ConcurrentDictionary<string, AgentStatus>(StringComparer.Ordina
 var audit = new ConcurrentQueue<AgentAuditEvent>();
 var saveLock = new SemaphoreSlim(1, 1);
 var requestLimits = new ConcurrentDictionary<string, DateTimeOffset>(StringComparer.Ordinal);
+var authRateLimits = new ConcurrentDictionary<string, (DateTimeOffset StartedAt, int Attempts)>(StringComparer.Ordinal);
 var controlSessions = new ConcurrentDictionary<string, ControlSessionStatus>(StringComparer.OrdinalIgnoreCase);
 List<ControlSessionStatus> savedControlSessions = await LoadStateAsync("control-sessions", controlSessionsPath, new List<ControlSessionStatus>());
 foreach (ControlSessionStatus session in savedControlSessions)
@@ -115,6 +116,35 @@ app.Use(async (context, next) =>
 
 app.Use(async (context, next) =>
 {
+    context.Response.Headers["X-Content-Type-Options"] = "nosniff";
+    context.Response.Headers["X-Frame-Options"] = "DENY";
+    context.Response.Headers["Referrer-Policy"] = "strict-origin-when-cross-origin";
+    context.Response.Headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()";
+    context.Response.Headers["Content-Security-Policy"] = "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'";
+    if (context.Request.IsHttps || context.Request.Headers["X-Forwarded-Proto"].FirstOrDefault() == "https")
+        context.Response.Headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains";
+
+    string path = context.Request.Path.Value ?? "";
+    if (context.Request.Method == "POST" && path is "/api/auth/login" or "/api/auth/register" or "/api/auth/recover" or "/api/auth/resend-confirmation" or "/api/auth/mfa/verify" or "/api/auth/mfa/recover")
+    {
+        int maximum = path == "/api/auth/login" ? 10 : path is "/api/auth/mfa/verify" or "/api/auth/mfa/recover" ? 8 : 5;
+        TimeSpan window = path == "/api/auth/register" ? TimeSpan.FromHours(1) : TimeSpan.FromMinutes(15);
+        string key = $"{ClientIp(context)}:{path}";
+        DateTimeOffset now = DateTimeOffset.UtcNow;
+        var state = authRateLimits.AddOrUpdate(key, _ => (now, 1), (_, previous) => now - previous.StartedAt >= window ? (now, 1) : (previous.StartedAt, previous.Attempts + 1));
+        if (state.Attempts > maximum)
+        {
+            context.Response.StatusCode = StatusCodes.Status429TooManyRequests;
+            context.Response.Headers["Retry-After"] = ((int)Math.Ceiling((window - (now - state.StartedAt)).TotalSeconds)).ToString();
+            await context.Response.WriteAsJsonAsync(new { error = "Demasiados intentos. Esperá unos minutos antes de volver a intentarlo." });
+            return;
+        }
+    }
+    await next();
+});
+
+app.Use(async (context, next) =>
+{
     bool publicPath = context.Request.Path.Equals("/") ||
         context.Request.Path.Equals("/portal") ||
         context.Request.Path.Equals("/admin-ares") ||
@@ -128,6 +158,7 @@ app.Use(async (context, next) =>
         context.Request.Path.Equals("/api/billing/mercadopago/webhook") ||
         context.Request.Path.Equals("/api/auth/login") ||
         context.Request.Path.Equals("/api/auth/refresh") ||
+        context.Request.Path.Equals("/api/auth/logout") ||
         context.Request.Path.Equals("/api/auth/register") ||
         context.Request.Path.Equals("/api/auth/resend-confirmation") ||
         context.Request.Path.Equals("/api/agents/enroll") ||
@@ -239,17 +270,24 @@ app.MapPost("/api/auth/login", async (LoginRequest request, HttpContext context,
     if (result is null) return Results.Json(new { error = "Correo, contraseña o permisos inválidos." }, statusCode: 401);
     if (!result.MfaRequired)
         await persistence.RegisterAuthSessionAsync(result.User.UserId, result.User.OrganizationId, HashToken(result.AccessToken), HashToken(result.RefreshToken), client, ip);
-    return Results.Ok(result);
+    return IsWebAuthClient(context) && !result.MfaRequired ? WebAuthResult(context, result) : Results.Ok(result);
 });
 
-app.MapPost("/api/auth/refresh", async (RefreshRequest request, HttpContext context, CancellationToken cancellationToken) =>
+app.MapPost("/api/auth/refresh", async (RefreshRequest? request, HttpContext context, CancellationToken cancellationToken) =>
 {
-    if (await persistence.IsAuthTokenRevokedAsync(HashToken(request.RefreshToken), true))
+    string refreshToken = IsWebAuthClient(context) ? context.Request.Cookies["ares_refresh"] ?? "" : request?.RefreshToken ?? "";
+    if (string.IsNullOrWhiteSpace(refreshToken) || await persistence.IsAuthTokenRevokedAsync(HashToken(refreshToken), true))
         return Results.Json(new { error = "Esta sesión fue cerrada remotamente." }, statusCode: 401);
-    AuthResult? result = await authService.RefreshAsync(request.RefreshToken, cancellationToken);
+    AuthResult? result = await authService.RefreshAsync(refreshToken, cancellationToken);
     if (result is null) return Results.Json(new { error = "La sesión venció. Iniciá sesión nuevamente." }, statusCode: 401);
     await persistence.RegisterAuthSessionAsync(result.User.UserId, result.User.OrganizationId, HashToken(result.AccessToken), HashToken(result.RefreshToken), ClientName(context), ClientIp(context));
-    return Results.Ok(result);
+    return IsWebAuthClient(context) ? WebAuthResult(context, result) : Results.Ok(result);
+});
+
+app.MapPost("/api/auth/logout", (HttpContext context) =>
+{
+    context.Response.Cookies.Delete("ares_refresh", new CookieOptions { Secure = true, HttpOnly = true, SameSite = SameSiteMode.Strict, Path = "/api/auth" });
+    return Results.Ok(new { loggedOut = true });
 });
 
 app.MapGet("/api/auth/me", (HttpContext context) => Results.Ok((AuthenticatedAdmin)context.Items["AresAdmin"]!));
@@ -542,7 +580,7 @@ app.MapPost("/api/auth/mfa/verify", async (MfaVerifyRequest request, HttpContext
     AuthResult? result = await authService.VerifyMfaAsync(request.AccessToken, request.FactorId, request.Code, cancellationToken);
     if (result is null) return Results.BadRequest(new { error = "El código de verificación no es válido." });
     await persistence.RegisterAuthSessionAsync(result.User.UserId, result.User.OrganizationId, HashToken(result.AccessToken), HashToken(result.RefreshToken), ClientName(context), ClientIp(context));
-    return Results.Ok(result);
+    return IsWebAuthClient(context) ? WebAuthResult(context, result) : Results.Ok(result);
 });
 app.MapPost("/api/auth/mfa/recover", async (MfaRecoveryRequest request, HttpContext context, CancellationToken cancellationToken) =>
 {
@@ -559,7 +597,7 @@ app.MapPost("/api/auth/mfa/recover", async (MfaRecoveryRequest request, HttpCont
         return Results.BadRequest(new { error = "El código de recuperación ya fue utilizado." });
     var result = new AuthResult(request.AccessToken, request.RefreshToken, 0, identity.Value.Admin, false, "");
     await persistence.RegisterAuthSessionAsync(result.User.UserId, result.User.OrganizationId, HashToken(result.AccessToken), HashToken(result.RefreshToken), ClientName(context), ClientIp(context));
-    return Results.Ok(result);
+    return IsWebAuthClient(context) ? WebAuthResult(context, result) : Results.Ok(result);
 });
 
 app.MapGet("/api/account/mfa", async (HttpContext context, CancellationToken cancellationToken) =>
@@ -624,6 +662,11 @@ app.MapPost("/api/account/mfa/verify", async (MfaVerifyRequest request, HttpCont
     await persistence.RegisterAuthSessionAsync(result.User.UserId, result.User.OrganizationId, HashToken(result.AccessToken), HashToken(result.RefreshToken), ClientName(context), ClientIp(context));
     List<string> recoveryCodes = GenerateRecoveryCodes();
     await persistence.ReplaceMfaRecoveryCodesAsync(result.User.UserId, recoveryCodes.Select(x => HashRecoveryCode(result.User.UserId, x)).ToList());
+    if (IsWebAuthClient(context))
+    {
+        context.Response.Cookies.Append("ares_refresh", result.RefreshToken, new CookieOptions { HttpOnly = true, Secure = true, SameSite = SameSiteMode.Strict, Path = "/api/auth", MaxAge = TimeSpan.FromDays(30), IsEssential = true });
+        return Results.Ok(new { result.AccessToken, result.ExpiresIn, result.User, result.MfaRequired, result.FactorId, recoveryCodes });
+    }
     return Results.Ok(new { result.AccessToken, result.RefreshToken, result.ExpiresIn, result.User, result.MfaRequired, result.FactorId, recoveryCodes });
 });
 app.MapDelete("/api/account/mfa/{factorId}", async (string factorId, HttpContext context, CancellationToken cancellationToken) =>
@@ -1371,7 +1414,16 @@ List<GroupPolicy> GetPolicies(Guid organizationId)
 bool IsOwner(HttpContext context) => context.Items["AresAdmin"] is AuthenticatedAdmin admin && admin.Role == "Owner";
 bool IsAdministrator(HttpContext context) => context.Items["AresAdmin"] is AuthenticatedAdmin admin && admin.Role is "Owner" or "Administrator";
 bool IsPlatformAdmin(HttpContext context) => context.Items["AresAdmin"] is AuthenticatedAdmin admin &&
-    !string.IsNullOrWhiteSpace(platformAdminUserId) && admin.UserId.ToString().Equals(platformAdminUserId, StringComparison.OrdinalIgnoreCase);
+    admin.MfaVerified && !string.IsNullOrWhiteSpace(platformAdminUserId) && admin.UserId.ToString().Equals(platformAdminUserId, StringComparison.OrdinalIgnoreCase);
+bool IsWebAuthClient(HttpContext context) => context.Request.Headers["X-ARES-Web"].FirstOrDefault() == "1";
+IResult WebAuthResult(HttpContext context, AuthResult result)
+{
+    context.Response.Cookies.Append("ares_refresh", result.RefreshToken, new CookieOptions
+    {
+        HttpOnly = true, Secure = true, SameSite = SameSiteMode.Strict, Path = "/api/auth", MaxAge = TimeSpan.FromDays(30), IsEssential = true
+    });
+    return Results.Ok(new { result.AccessToken, result.ExpiresIn, result.User, result.MfaRequired, result.FactorId });
+}
 bool ValidRole(string role) => role is "Owner" or "Administrator" or "Operator" or "Viewer";
 byte[] HashInvitationCode(string? code) => SHA256.HashData(Encoding.UTF8.GetBytes((code ?? "").Trim().ToUpperInvariant()));
 byte[] HashSecret(string? value) => SHA256.HashData(Encoding.UTF8.GetBytes((value ?? "").Trim().ToUpperInvariant()));

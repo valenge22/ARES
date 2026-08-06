@@ -35,12 +35,14 @@ internal sealed class AresAuthService
         if (!response.IsSuccessStatusCode) return null;
         using JsonDocument document = JsonDocument.Parse(await response.Content.ReadAsStringAsync(cancellationToken));
         if (!document.RootElement.TryGetProperty("id", out JsonElement idElement) || !Guid.TryParse(idElement.GetString(), out Guid id)) return null;
-        if (VerifiedFactorId(document.RootElement) is not null && ReadAal(accessToken) != "aal2") return null;
+        string? verifiedFactorId = VerifiedFactorId(document.RootElement);
+        bool mfaVerified = verifiedFactorId is not null && ReadAal(accessToken) == "aal2";
+        if (verifiedFactorId is not null && !mfaVerified) return null;
         AdminUser? admin = await persistence.GetAdminAsync(id);
         if (admin is null || !admin.Enabled) return null;
         string email = document.RootElement.TryGetProperty("email", out JsonElement item) ? item.GetString() ?? "" : "";
         await persistence.UpdateAdminEmailAsync(admin.UserId, email);
-        return new(admin.UserId, admin.OrganizationId, email, admin.DisplayName, admin.Role);
+        return new(admin.UserId, admin.OrganizationId, email, admin.DisplayName, admin.Role, mfaVerified);
     }
 
     public async Task<SignUpResult> SignUpAsync(string email, string password, string displayName, string redirectUrl, CancellationToken cancellationToken)
@@ -143,7 +145,7 @@ internal sealed class AresAuthService
         if (token.User is null || !Guid.TryParse(token.User.Id, out Guid userId)) return null;
         AdminUser? admin = await persistence.GetAdminAsync(userId); if (admin is null || !admin.Enabled) return null;
         return new(token.AccessToken, token.RefreshToken, token.ExpiresIn,
-            new(admin.UserId, admin.OrganizationId, token.User.Email ?? admin.Email, admin.DisplayName, admin.Role), false, "");
+            new(admin.UserId, admin.OrganizationId, token.User.Email ?? admin.Email, admin.DisplayName, admin.Role, true), false, "");
     }
 
     public async Task<bool> UnenrollMfaAsync(string accessToken, string factorId, CancellationToken cancellationToken)
@@ -248,7 +250,7 @@ internal sealed class AresAuthService
     private sealed class AuthUser { [JsonPropertyName("id")] public string Id { get; set; } = ""; [JsonPropertyName("email")] public string? Email { get; set; } }
 }
 
-internal sealed record AuthenticatedAdmin(Guid UserId, Guid OrganizationId, string Email, string DisplayName, string Role);
+internal sealed record AuthenticatedAdmin(Guid UserId, Guid OrganizationId, string Email, string DisplayName, string Role, bool MfaVerified = false);
 internal sealed record SignUpResult(Guid? UserId, string ErrorCode, string ErrorMessage);
 internal sealed record AuthResult(string AccessToken, string RefreshToken, int ExpiresIn, AuthenticatedAdmin User, bool MfaRequired = false, string FactorId = "");
 internal sealed record LoginRequest(string Email, string Password);

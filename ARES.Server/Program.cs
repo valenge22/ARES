@@ -88,6 +88,27 @@ foreach (AgentAuditEvent evento in await LoadStateAsync("audit", auditPath, new 
 
 app.Use(async (context, next) =>
 {
+    try
+    {
+        await next();
+    }
+    catch (Exception exception)
+    {
+        Console.Error.WriteLine($"Error no controlado en {context.Request.Method} {context.Request.Path}: {exception}");
+        if (!context.Response.HasStarted)
+        {
+            context.Response.Clear();
+            context.Response.StatusCode = StatusCodes.Status500InternalServerError;
+            await context.Response.WriteAsJsonAsync(new
+            {
+                error = $"ARES no pudo completar la solicitud ({exception.GetType().Name}). Revisá los logs del servidor."
+            });
+        }
+    }
+});
+
+app.Use(async (context, next) =>
+{
     bool publicPath = context.Request.Path.Equals("/") ||
         context.Request.Path.Equals("/portal") ||
         context.Request.Path.Equals("/admin-ares") ||

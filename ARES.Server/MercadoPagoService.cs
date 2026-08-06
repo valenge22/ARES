@@ -44,6 +44,18 @@ internal sealed class MercadoPagoService
         return await ReadSubscriptionAsync(response, cancellationToken);
     }
 
+    public async Task<MercadoPagoSubscription?> FindSubscriptionByPlanAsync(string planId, CancellationToken cancellationToken)
+    {
+        if (!IsConfigured || string.IsNullOrWhiteSpace(planId)) return null;
+        using HttpResponseMessage response = await http.GetAsync($"/preapproval/search?preapproval_plan_id={Uri.EscapeDataString(planId)}&sort=date_created&criteria=desc", cancellationToken);
+        if (!response.IsSuccessStatusCode) return null;
+        using JsonDocument document = JsonDocument.Parse(await response.Content.ReadAsStringAsync(cancellationToken));
+        if (!document.RootElement.TryGetProperty("results", out JsonElement results) || results.ValueKind != JsonValueKind.Array) return null;
+        JsonElement selected = results.EnumerateArray().FirstOrDefault(item =>
+            item.TryGetProperty("preapproval_plan_id", out JsonElement value) && value.GetString() == planId);
+        return selected.ValueKind == JsonValueKind.Object ? ReadSubscription(selected) : null;
+    }
+
     public async Task<bool> CancelSubscriptionAsync(string id, CancellationToken cancellationToken)
     {
         if (!IsConfigured || string.IsNullOrWhiteSpace(id)) return false;
@@ -67,10 +79,19 @@ internal sealed class MercadoPagoService
         if (!IsConfigured) return null;
         using HttpResponseMessage response = await http.GetAsync($"/authorized_payments/{Uri.EscapeDataString(id)}", cancellationToken);
         if (!response.IsSuccessStatusCode) return null;
-        using JsonDocument document = JsonDocument.Parse(await response.Content.ReadAsStringAsync(cancellationToken)); JsonElement root = document.RootElement;
-        string paymentStatus = root.TryGetProperty("payment", out JsonElement payment) && payment.TryGetProperty("status", out JsonElement status) ? status.GetString() ?? "" : "";
-        DateTimeOffset? debitDate = root.TryGetProperty("debit_date", out JsonElement date) && DateTimeOffset.TryParse(date.GetString(), out DateTimeOffset parsed) ? parsed : null;
-        return new(root.TryGetProperty("preapproval_id", out JsonElement subscription) ? subscription.GetString() ?? "" : "", paymentStatus, debitDate);
+        using JsonDocument document = JsonDocument.Parse(await response.Content.ReadAsStringAsync(cancellationToken));
+        return ReadAuthorizedPayment(document.RootElement);
+    }
+
+    public async Task<MercadoPagoAuthorizedPayment?> FindLatestAuthorizedPaymentAsync(string subscriptionId, CancellationToken cancellationToken)
+    {
+        if (!IsConfigured || string.IsNullOrWhiteSpace(subscriptionId)) return null;
+        using HttpResponseMessage response = await http.GetAsync($"/authorized_payments/search?preapproval_id={Uri.EscapeDataString(subscriptionId)}&sort=date_created&criteria=desc", cancellationToken);
+        if (!response.IsSuccessStatusCode) return null;
+        using JsonDocument document = JsonDocument.Parse(await response.Content.ReadAsStringAsync(cancellationToken));
+        if (!document.RootElement.TryGetProperty("results", out JsonElement results) || results.ValueKind != JsonValueKind.Array) return null;
+        JsonElement selected = results.EnumerateArray().FirstOrDefault();
+        return selected.ValueKind == JsonValueKind.Object ? ReadAuthorizedPayment(selected) : null;
     }
 
     public bool ValidateWebhook(string dataId, string requestId, string signature)
@@ -87,13 +108,25 @@ internal sealed class MercadoPagoService
     private static async Task<MercadoPagoSubscription?> ReadSubscriptionAsync(HttpResponseMessage response, CancellationToken cancellationToken)
     {
         if (!response.IsSuccessStatusCode) return null;
-        using JsonDocument document = JsonDocument.Parse(await response.Content.ReadAsStringAsync(cancellationToken)); JsonElement root = document.RootElement;
+        using JsonDocument document = JsonDocument.Parse(await response.Content.ReadAsStringAsync(cancellationToken));
+        return ReadSubscription(document.RootElement);
+    }
+
+    private static MercadoPagoSubscription ReadSubscription(JsonElement root)
+    {
         decimal amount = root.TryGetProperty("auto_recurring", out JsonElement recurring) && recurring.TryGetProperty("transaction_amount", out JsonElement amountValue) ? amountValue.GetDecimal() : 0;
         return new(root.TryGetProperty("id", out JsonElement id) ? id.GetString() ?? "" : "",
             root.TryGetProperty("status", out JsonElement status) ? status.GetString() ?? "" : "",
             root.TryGetProperty("external_reference", out JsonElement reference) ? reference.GetString() ?? "" : "",
             root.TryGetProperty("init_point", out JsonElement point) ? point.GetString() ?? "" : "", amount,
             root.TryGetProperty("preapproval_plan_id", out JsonElement plan) ? plan.GetString() ?? "" : "");
+    }
+
+    private static MercadoPagoAuthorizedPayment ReadAuthorizedPayment(JsonElement root)
+    {
+        string paymentStatus = root.TryGetProperty("payment", out JsonElement payment) && payment.TryGetProperty("status", out JsonElement status) ? status.GetString() ?? "" : "";
+        DateTimeOffset? debitDate = root.TryGetProperty("debit_date", out JsonElement date) && DateTimeOffset.TryParse(date.GetString(), out DateTimeOffset parsed) ? parsed : null;
+        return new(root.TryGetProperty("preapproval_id", out JsonElement subscription) ? subscription.GetString() ?? "" : "", paymentStatus, debitDate);
     }
 
     private static async Task<string> ReadApiErrorAsync(HttpResponseMessage response, CancellationToken cancellationToken)

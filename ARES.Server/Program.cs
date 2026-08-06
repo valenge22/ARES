@@ -245,9 +245,11 @@ app.MapGet("/api/license", async (HttpContext context) =>
     LicenseInfo? license = await persistence.GetLicenseAsync(CurrentOrganization(context));
     return license is null ? Results.NotFound() : Results.Ok(new { license, canManagePlatform = IsPlatformAdmin(context) });
 });
-app.MapGet("/api/billing", async (HttpContext context) =>
+app.MapGet("/api/billing", async (HttpContext context, CancellationToken cancellationToken) =>
 {
     BillingSubscription? subscription = await persistence.GetBillingSubscriptionAsync(CurrentOrganization(context));
+    if (subscription is not null && subscription.Status == "pending")
+        subscription = await ReconcileBillingAsync(subscription, mercadoPago, persistence, cancellationToken);
     return Results.Json(new { configured = mercadoPago.IsConfigured, usdArsRate = mercadoPago.UsdArsRate, subscription });
 });
 app.MapPost("/api/billing/checkout", async (BillingCheckoutRequest request, HttpContext context, CancellationToken cancellationToken) =>
@@ -1325,6 +1327,36 @@ bool CanAccess(string role, string method, PathString path)
          value.EndsWith("/override", StringComparison.OrdinalIgnoreCase) ||
          value.EndsWith("/name", StringComparison.OrdinalIgnoreCase) ||
          value.EndsWith("/group", StringComparison.OrdinalIgnoreCase));
+}
+
+async Task<BillingSubscription> ReconcileBillingAsync(BillingSubscription stored, MercadoPagoService provider,
+    AresPersistence database, CancellationToken cancellationToken)
+{
+    MercadoPagoSubscription? remote = await provider.FindSubscriptionByPlanAsync(stored.ProviderSubscriptionId, cancellationToken);
+    if (remote is null || string.IsNullOrWhiteSpace(remote.Id)) return stored;
+
+    MercadoPagoAuthorizedPayment? payment = await provider.FindLatestAuthorizedPaymentAsync(remote.Id, cancellationToken);
+    bool approved = payment?.PaymentStatus == "approved";
+    DateTimeOffset? paidUntil = approved ? (payment?.DebitDate ?? DateTimeOffset.UtcNow).AddMonths(1) : stored.PaidUntil;
+    var updated = stored with
+    {
+        ProviderSubscriptionId = remote.Id,
+        Status = approved ? "authorized" : remote.Status,
+        LastPaymentStatus = payment?.PaymentStatus ?? stored.LastPaymentStatus,
+        PaidUntil = paidUntil
+    };
+    await database.UpsertBillingSubscriptionAsync(updated);
+    await provider.CancelSubscriptionOrPlanAsync(stored.ProviderSubscriptionId, cancellationToken);
+
+    if (approved)
+    {
+        PlanDefinition definition = PlanDetails(stored.RequestedPlan);
+        decimal usd = definition.MonthlyPriceUsd + stored.AdditionalDevices * definition.AdditionalDeviceUsd +
+            stored.AdditionalPanelUsers * definition.AdditionalPanelUserUsd;
+        await database.UpdateLicenseAsync(stored.OrganizationId, stored.RequestedPlan, "Active", definition.IncludedDevices,
+            stored.AdditionalDevices, definition.IncludedPanelUsers, stored.AdditionalPanelUsers, usd, paidUntil, 3);
+    }
+    return updated;
 }
 
 string NormalizePlan(string? value) => (value ?? "").Trim().ToLowerInvariant() switch

@@ -14,6 +14,9 @@ RUN apt-get update \
 WORKDIR /app
 COPY --from=build /app .
 ENV ASPNETCORE_URLS=http://+:8080
+# Render limita las instancias inotify. Usar sondeo evita que .NET cree
+# observadores de archivos durante el inicio de la configuracion.
+ENV DOTNET_USE_POLLING_FILE_WATCHER=1
 EXPOSE 8080
 VOLUME ["/app/data"]
 ENTRYPOINT ["dotnet", "ARES.Server.dll"]

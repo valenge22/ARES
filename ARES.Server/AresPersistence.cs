@@ -382,6 +382,22 @@ internal sealed class AresPersistence
         return result;
     }
 
+    public async Task<List<PlatformBillingPayment>> GetAllBillingPaymentsAsync()
+    {
+        var result = new List<PlatformBillingPayment>();
+        await using var connection = new NpgsqlConnection(connectionString); await connection.OpenAsync();
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            select p.payment_id,p.organization_id,o.name,p.provider_payment_id,p.plan,p.amount_ars,p.status,
+                   p.period_start,p.period_end,coalesce(p.receipt_url,''),p.occurred_at
+            from ares_billing_payments p join ares_organizations o on o.organization_id=p.organization_id
+            where o.enabled=true order by p.occurred_at desc limit 2000
+            """;
+        await using var reader = await command.ExecuteReaderAsync();
+        while (await reader.ReadAsync()) result.Add(new(reader.GetGuid(0),reader.GetGuid(1),reader.GetString(2),reader.GetString(3),reader.GetString(4),reader.GetDecimal(5),reader.GetString(6),reader.IsDBNull(7)?null:reader.GetFieldValue<DateTimeOffset>(7),reader.IsDBNull(8)?null:reader.GetFieldValue<DateTimeOffset>(8),reader.GetString(9),reader.GetFieldValue<DateTimeOffset>(10)));
+        return result;
+    }
+
     public async Task EnsureOwnerAsync(string? userId, string? displayName)
     {
         if (!UsesDatabase || string.IsNullOrWhiteSpace(userId)) return;
@@ -1032,6 +1048,9 @@ internal sealed record AuthSessionInfo(Guid SessionId, string ClientName, string
 internal sealed record BillingSubscription(Guid OrganizationId, string ProviderSubscriptionId, string RequestedPlan,
     int AdditionalDevices, int AdditionalPanelUsers, decimal AmountArs, string Status, string LastPaymentStatus, DateTimeOffset? PaidUntil);
 internal sealed record BillingPayment(Guid PaymentId, Guid OrganizationId, string ProviderPaymentId, string ProviderSubscriptionId,
+    string Plan, decimal AmountArs, string Status, DateTimeOffset? PeriodStart, DateTimeOffset? PeriodEnd,
+    string ReceiptUrl, DateTimeOffset OccurredAt);
+internal sealed record PlatformBillingPayment(Guid PaymentId, Guid OrganizationId, string OrganizationName, string ProviderPaymentId,
     string Plan, decimal AmountArs, string Status, DateTimeOffset? PeriodStart, DateTimeOffset? PeriodEnd,
     string ReceiptUrl, DateTimeOffset OccurredAt);
 internal sealed record LoginEventInfo(string ClientName, string IpAddress, bool Successful, DateTimeOffset OccurredAt);

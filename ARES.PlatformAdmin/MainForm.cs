@@ -7,6 +7,7 @@ internal sealed class MainForm : Form
 {
     private readonly DataGridView grid = new() { Dock = DockStyle.Fill, ReadOnly = true, MultiSelect = false, SelectionMode = DataGridViewSelectionMode.FullRowSelect, AllowUserToAddRows = false, AllowUserToDeleteRows = false, AutoGenerateColumns = false, BackgroundColor = Color.White, BorderStyle = BorderStyle.None, RowHeadersVisible = false, AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill };
     private readonly Label summary = new() { Dock = DockStyle.Fill, Font = new Font("Segoe UI", 11, FontStyle.Bold), ForeColor = Color.FromArgb(30, 64, 175), TextAlign = ContentAlignment.MiddleLeft };
+    private List<OrganizationLicense> organizations = [];
     public MainForm()
     {
         Text = "ARES · Administración de plataforma"; WindowState = FormWindowState.Maximized; MinimumSize = new Size(1050, 650); BackColor = Color.FromArgb(241, 245, 249);
@@ -14,6 +15,8 @@ internal sealed class MainForm : Form
         header.Controls.Add(new Label { Text = "ARES · ADMINISTRACIÓN", Dock = DockStyle.Left, Width = 370, ForeColor = Color.FromArgb(56, 189, 248), Font = new Font("Segoe UI", 18, FontStyle.Bold), TextAlign = ContentAlignment.MiddleLeft });
         var logout = HeaderButton("Cerrar sesión"); logout.Click += (_, _) => { PlatformAuth.Client.Logout(); Application.Restart(); }; header.Controls.Add(logout);
         var web = HeaderButton("Abrir respaldo web"); web.Click += (_, _) => OpenWeb(); header.Controls.Add(web);
+        var alerts = HeaderButton("Alertas"); alerts.Click += (_, _) => ShowAlerts(); header.Controls.Add(alerts);
+        var billing = HeaderButton("Facturación"); billing.Click += async (_, _) => await ShowBillingAsync(); header.Controls.Add(billing);
         var refresh = HeaderButton("Actualizar"); refresh.Click += async (_, _) => await LoadAsync(); header.Controls.Add(refresh);
         var metrics = new Panel { Dock = DockStyle.Top, Height = 65, Padding = new Padding(24, 10, 24, 8), BackColor = Color.White }; metrics.Controls.Add(summary);
         ConfigureGrid();
@@ -45,8 +48,8 @@ internal sealed class MainForm : Form
         try
         {
             using HttpClient http = PlatformAuth.Client.CreateHttpClient();
-            List<OrganizationLicense> items = await http.GetFromJsonAsync<List<OrganizationLicense>>($"{PlatformAuth.ServerUrl}/api/platform/organizations") ?? [];
-            grid.DataSource = items; summary.Text = $"Organizaciones: {items.Count}     Equipos activos: {items.Sum(x => x.UsedDevices)}     Pruebas activas: {items.Count(x => x.Plan == "Trial" && x.AccessStatus == "Active")}";
+            organizations = await http.GetFromJsonAsync<List<OrganizationLicense>>($"{PlatformAuth.ServerUrl}/api/platform/organizations") ?? [];
+            grid.DataSource = organizations; summary.Text = $"Organizaciones: {organizations.Count}     Equipos activos: {organizations.Sum(x => x.UsedDevices)}     Alertas: {organizations.Count(IsAlert)}";
         }
         catch (Exception ex) { summary.Text = $"No se pudo actualizar: {ex.Message}"; }
     }
@@ -92,6 +95,50 @@ internal sealed class MainForm : Form
         try { using HttpClient http = PlatformAuth.Client.CreateHttpClient(); using HttpResponseMessage response = await http.DeleteAsync($"{PlatformAuth.ServerUrl}/api/platform/organizations/{item.OrganizationId}"); await EnsureSuccessAsync(response); await LoadAsync(); }
         catch (Exception ex) { MessageBox.Show(ex.Message, "ARES", MessageBoxButtons.OK, MessageBoxIcon.Error); }
     }
+    private async Task ShowBillingAsync()
+    {
+        using var dialog = new Form { Text = "Facturación global de ARES", Width = 1180, Height = 680, StartPosition = FormStartPosition.CenterParent, BackColor = Color.FromArgb(241, 245, 249) };
+        var search = new TextBox { PlaceholderText = "Buscar cliente u operación", Width = 280 };
+        var status = Choice(["Todos", "approved", "pending", "in_process", "rejected"], "Todos"); status.Width = 170;
+        var total = new Label { AutoSize = true, Font = new Font("Segoe UI", 11, FontStyle.Bold), ForeColor = Color.FromArgb(30, 64, 175), Margin = new Padding(20, 10, 0, 0) };
+        var filters = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 62, Padding = new Padding(18, 12, 18, 8), BackColor = Color.White, Controls = { search, status, total } };
+        var paymentsGrid = new DataGridView { Dock = DockStyle.Fill, ReadOnly = true, AutoGenerateColumns = false, AllowUserToAddRows = false, RowHeadersVisible = false, SelectionMode = DataGridViewSelectionMode.FullRowSelect, BackgroundColor = Color.White, AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill };
+        paymentsGrid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Fecha", DataPropertyName = nameof(PlatformPayment.DateText) }); paymentsGrid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Organización", DataPropertyName = nameof(PlatformPayment.OrganizationName), FillWeight = 145 });
+        paymentsGrid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Operación", DataPropertyName = nameof(PlatformPayment.ProviderPaymentId), FillWeight = 125 }); paymentsGrid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Plan", DataPropertyName = nameof(PlatformPayment.PlanName) });
+        paymentsGrid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Importe", DataPropertyName = nameof(PlatformPayment.AmountText) }); paymentsGrid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Estado", DataPropertyName = nameof(PlatformPayment.StatusName) });
+        paymentsGrid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Período", DataPropertyName = nameof(PlatformPayment.PeriodText), FillWeight = 135 }); paymentsGrid.Columns.Add(new DataGridViewButtonColumn { HeaderText = "Comprobante", Text = "Abrir", UseColumnTextForButtonValue = true, FillWeight = 75 });
+        dialog.Controls.Add(paymentsGrid); dialog.Controls.Add(filters);
+        try
+        {
+            using HttpClient http = PlatformAuth.Client.CreateHttpClient();
+            List<PlatformPayment> payments = await http.GetFromJsonAsync<List<PlatformPayment>>($"{PlatformAuth.ServerUrl}/api/platform/billing/history") ?? [];
+            void ApplyFilter()
+            {
+                string term = search.Text.Trim(); string selectedStatus = status.Text;
+                List<PlatformPayment> visible = payments.Where(x => (selectedStatus == "Todos" || x.Status == selectedStatus) && (term.Length == 0 || x.OrganizationName.Contains(term, StringComparison.OrdinalIgnoreCase) || x.ProviderPaymentId.Contains(term, StringComparison.OrdinalIgnoreCase))).ToList();
+                paymentsGrid.DataSource = visible; DateTime start = new(DateTime.Today.Year, DateTime.Today.Month, 1); decimal monthly = payments.Where(x => x.Status == "approved" && x.OccurredAt.LocalDateTime >= start).Sum(x => x.AmountArs); total.Text = $"Aprobado este mes: ARS {monthly:N2} · Movimientos: {visible.Count}";
+            }
+            search.TextChanged += (_, _) => ApplyFilter(); status.SelectedIndexChanged += (_, _) => ApplyFilter();
+            paymentsGrid.CellContentClick += (_, e) => { if (e.RowIndex >= 0 && e.ColumnIndex == 7 && paymentsGrid.Rows[e.RowIndex].DataBoundItem is PlatformPayment payment && !string.IsNullOrWhiteSpace(payment.ReceiptUrl)) System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(payment.ReceiptUrl) { UseShellExecute = true }); };
+            ApplyFilter(); dialog.ShowDialog(this);
+        }
+        catch (Exception ex) { MessageBox.Show(ex.Message, "Facturación", MessageBoxButtons.OK, MessageBoxIcon.Error); }
+    }
+    private void ShowAlerts()
+    {
+        List<string> alerts = organizations.SelectMany(x => AlertMessages(x)).ToList();
+        using var dialog = new Form { Text = "Alertas comerciales", Width = 760, Height = 540, StartPosition = FormStartPosition.CenterParent, BackColor = Color.White };
+        var list = new ListBox { Dock = DockStyle.Fill, Font = new Font("Segoe UI", 11), IntegralHeight = false };
+        list.Items.AddRange((alerts.Count == 0 ? ["No hay alertas comerciales activas."] : alerts).Cast<object>().ToArray()); dialog.Controls.Add(list); dialog.ShowDialog(this);
+    }
+    private static bool IsAlert(OrganizationLicense x) => AlertMessages(x).Any();
+    private static IEnumerable<string> AlertMessages(OrganizationLicense x)
+    {
+        if (x.AccessStatus is "PastDue" or "Expired" or "Suspended") yield return $"{x.OrganizationName}: {x.AccessStatusName}.";
+        if (x.AccessEndsAt.HasValue && x.AccessEndsAt.Value > DateTimeOffset.UtcNow && x.AccessEndsAt.Value <= DateTimeOffset.UtcNow.AddDays(7)) yield return $"{x.OrganizationName}: vence el {x.AccessEndsAt.Value.ToLocalTime():dd/MM/yyyy}.";
+        if (x.TotalDevices > 0 && x.UsedDevices >= x.TotalDevices) yield return $"{x.OrganizationName}: alcanzó el límite de equipos ({x.UsedDevices}/{x.TotalDevices}).";
+        if (x.TotalPanelUsers > 0 && x.UsedPanelUsers >= x.TotalPanelUsers) yield return $"{x.OrganizationName}: alcanzó el límite de usuarios ({x.UsedPanelUsers}/{x.TotalPanelUsers}).";
+    }
     private static ComboBox Choice(string[] values, string selected) { var result = new ComboBox { Width = 360, DropDownStyle = ComboBoxStyle.DropDownList }; result.Items.AddRange(values); result.SelectedItem = values.Contains(selected) ? selected : values[0]; return result; }
     private static NumericUpDown Number(int value, int min, int max) => new() { Width = 360, Minimum = min, Maximum = max, Value = Math.Clamp(value, min, max) };
     private static void AddField(FlowLayoutPanel panel, string label, Control control) { panel.Controls.Add(new Label { Text = label, Width = 360, Height = 20, Margin = new Padding(0, 6, 0, 0) }); panel.Controls.Add(control); }
@@ -105,4 +152,10 @@ internal sealed class OrganizationLicense
     public int MaxDevices { get; set; } public int AdditionalDevices { get; set; } public int TotalDevices { get; set; } public long UsedDevices { get; set; } public int MaxPanelUsers { get; set; } public int AdditionalPanelUsers { get; set; } public int TotalPanelUsers { get; set; } public long UsedPanelUsers { get; set; }
     public decimal MonthlyPriceUsd { get; set; } public int GraceDays { get; set; } public DateTimeOffset? ExpiresAt { get; set; } public DateTimeOffset? AccessEndsAt { get; set; }
     public string DevicesText => $"{UsedDevices}/{TotalDevices}"; public string UsersText => $"{UsedPanelUsers}/{TotalPanelUsers}"; public string ExpirationText => AccessEndsAt?.ToLocalTime().ToString("dd/MM/yyyy") ?? "Sin vencimiento";
+}
+
+internal sealed class PlatformPayment
+{
+    public string OrganizationName { get; set; } = ""; public string ProviderPaymentId { get; set; } = ""; public string Plan { get; set; } = ""; public decimal AmountArs { get; set; } public string Status { get; set; } = ""; public DateTimeOffset? PeriodStart { get; set; } public DateTimeOffset? PeriodEnd { get; set; } public string ReceiptUrl { get; set; } = ""; public DateTimeOffset OccurredAt { get; set; }
+    public string DateText => OccurredAt.ToLocalTime().ToString("dd/MM/yyyy HH:mm"); public string PlanName => Plan switch { "Basic" => "Esencial", "Professional" => "Profesional", "Business" => "Empresa", "Enterprise" => "Corporativo", _ => Plan }; public string AmountText => $"ARS {AmountArs:N2}"; public string StatusName => Status switch { "approved" => "Aprobado", "pending" => "Pendiente", "in_process" => "En proceso", "rejected" => "Rechazado", _ => Status }; public string PeriodText => PeriodStart.HasValue ? $"{PeriodStart.Value.ToLocalTime():dd/MM/yyyy}{(PeriodEnd.HasValue ? $" al {PeriodEnd.Value.ToLocalTime():dd/MM/yyyy}" : "")}" : "—";
 }

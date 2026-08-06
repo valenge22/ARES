@@ -418,6 +418,8 @@ app.MapPost("/api/billing/mercadopago/webhook", async (HttpContext context, Json
 });
 app.MapGet("/api/platform/organizations", async (HttpContext context) =>
     IsPlatformAdmin(context) ? Results.Ok(await persistence.GetLicensesAsync()) : Results.Forbid());
+app.MapGet("/api/platform/billing/history", async (HttpContext context) =>
+    IsPlatformAdmin(context) ? Results.Ok(await persistence.GetAllBillingPaymentsAsync()) : Results.Forbid());
 app.MapPut("/api/platform/organizations/{id:guid}/license", async (Guid id, UpdateLicenseRequest request, HttpContext context) =>
 {
     if (!IsPlatformAdmin(context)) return Results.Forbid();

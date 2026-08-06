@@ -8,7 +8,7 @@
     <AssemblyName>ARES.Administracion</AssemblyName>
     <Product>ARES Administración</Product>
     <Description>Consola privada de administración de la plataforma ARES.</Description>
-    <Version>1.0.1</Version>
+    <Version>1.1.0</Version>
     <ApplicationIcon>..\Branding\ares.ico</ApplicationIcon>
   </PropertyGroup>
   <ItemGroup><ProjectReference Include="..\ARES.Shared\ARES.Shared.csproj" /></ItemGroup>

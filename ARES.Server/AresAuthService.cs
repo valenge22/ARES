@@ -82,6 +82,15 @@ internal sealed class AresAuthService
         return response.IsSuccessStatusCode;
     }
 
+    public async Task<bool> ResendConfirmationAsync(string email, string redirectUrl, CancellationToken cancellationToken)
+    {
+        if (!IsConfigured) return false;
+        using var request = CreateRequest(HttpMethod.Post, "/auth/v1/resend");
+        request.Content = JsonContent.Create(new { type = "signup", email, email_redirect_to = redirectUrl });
+        using HttpResponseMessage response = await http.SendAsync(request, cancellationToken);
+        return response.IsSuccessStatusCode;
+    }
+
     public async Task<bool> UpdatePasswordAsync(string accessToken, string password, CancellationToken cancellationToken)
     {
         using var request = CreateRequest(HttpMethod.Put, "/auth/v1/user");

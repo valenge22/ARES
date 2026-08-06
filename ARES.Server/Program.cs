@@ -122,6 +122,7 @@ app.Use(async (context, next) =>
         context.Request.Path.Equals("/api/auth/login") ||
         context.Request.Path.Equals("/api/auth/refresh") ||
         context.Request.Path.Equals("/api/auth/register") ||
+        context.Request.Path.Equals("/api/auth/resend-confirmation") ||
         context.Request.Path.Equals("/api/agents/enroll") ||
         context.Request.Path.Equals("/api/auth/recover") ||
         context.Request.Path.Equals("/api/auth/update-password");
@@ -493,6 +494,16 @@ app.MapPost("/api/auth/recover", async (RecoverRequest request, HttpRequest http
         : configuredOrigin.TrimEnd('/');
     await authService.RecoverAsync(request.Email.Trim(), $"{origin}/auth/reset", cancellationToken);
     return Results.Ok(new { sent = true });
+});
+
+app.MapPost("/api/auth/resend-confirmation", async (RecoverRequest request, HttpRequest httpRequest, CancellationToken cancellationToken) =>
+{
+    if (string.IsNullOrWhiteSpace(request.Email) || !request.Email.Contains('@')) return Results.BadRequest(new { error = "Ingresá un correo válido." });
+    string configuredOrigin = builder.Configuration["ARES_PUBLIC_URL"] ?? Environment.GetEnvironmentVariable("ARES_PUBLIC_URL") ?? "";
+    string forwardedScheme = httpRequest.Headers["X-Forwarded-Proto"].FirstOrDefault() ?? httpRequest.Scheme;
+    string origin = string.IsNullOrWhiteSpace(configuredOrigin) ? $"{forwardedScheme}://{httpRequest.Host}" : configuredOrigin.TrimEnd('/');
+    bool sent = await authService.ResendConfirmationAsync(request.Email.Trim(), $"{origin}/auth/confirmed", cancellationToken);
+    return sent ? Results.Ok(new { sent = true }) : Results.BadRequest(new { error = "Supabase no pudo reenviar el correo. Esperá unos minutos e intentá nuevamente." });
 });
 
 app.MapPost("/api/auth/update-password", async (UpdatePasswordRequest request, CancellationToken cancellationToken) =>

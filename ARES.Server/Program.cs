@@ -255,16 +255,20 @@ app.MapPost("/api/billing/checkout", async (BillingCheckoutRequest request, Http
     if (!IsOwner(context)) return Results.Forbid();
     if (!mercadoPago.IsConfigured) return Results.BadRequest(new { error = "Mercado Pago todavía no está configurado." });
     string plan = NormalizePlan(request.Plan); if (plan is "" or "Trial") return Results.BadRequest(new { error = "Elegí un plan pago válido." });
+    string payerEmail = request.PayerEmail?.Trim() ?? "";
+    if (payerEmail.Length is < 5 or > 320 || !payerEmail.Contains('@')) return Results.BadRequest(new { error = "Ingresá el correo de la cuenta compradora de Mercado Pago." });
     if (request.AdditionalDevices is < 0 or > 100000 || request.AdditionalPanelUsers is < 0 or > 10000)
         return Results.BadRequest(new { error = "Los adicionales no son válidos." });
     BillingSubscription? existing = await persistence.GetBillingSubscriptionAsync(CurrentOrganization(context));
     if (existing is not null && existing.Status == "authorized")
         return Results.BadRequest(new { error = "Ya existe una suscripción activa. La modificación de planes se habilitará desde Administrar suscripción." });
+    if (existing is not null && existing.Status == "pending" && !string.IsNullOrWhiteSpace(existing.ProviderSubscriptionId))
+        await mercadoPago.CancelSubscriptionAsync(existing.ProviderSubscriptionId, cancellationToken);
     PlanDefinition definition = PlanDetails(plan);
     decimal usd = definition.MonthlyPriceUsd + request.AdditionalDevices * definition.AdditionalDeviceUsd + request.AdditionalPanelUsers * definition.AdditionalPanelUserUsd;
     decimal ars = decimal.Round(usd * mercadoPago.UsdArsRate, 2);
     string origin = $"{context.Request.Scheme}://{context.Request.Host}";
-    MercadoPagoSubscription? created = await mercadoPago.CreateSubscriptionAsync(CurrentOrganization(context), CurrentAdmin(context).Email,
+    MercadoPagoSubscription? created = await mercadoPago.CreateSubscriptionAsync(CurrentOrganization(context), payerEmail,
         $"ARES {definition.DisplayName}", ars, $"{origin}/portal", $"{origin}/api/billing/mercadopago/webhook?source_news=webhooks", cancellationToken);
     if (created is null || string.IsNullOrWhiteSpace(created.CheckoutUrl)) return Results.BadRequest(new { error = "Mercado Pago no pudo crear la suscripción." });
     await persistence.UpsertBillingSubscriptionAsync(new(CurrentOrganization(context), created.Id, plan, request.AdditionalDevices,

@@ -88,4 +88,4 @@ internal sealed class MercadoPagoService
 
 internal sealed record MercadoPagoSubscription(string Id, string Status, string ExternalReference, string CheckoutUrl, decimal AmountArs);
 internal sealed record MercadoPagoAuthorizedPayment(string SubscriptionId, string PaymentStatus, DateTimeOffset? DebitDate);
-internal sealed record BillingCheckoutRequest(string Plan, int AdditionalDevices, int AdditionalPanelUsers);
+internal sealed record BillingCheckoutRequest(string Plan, int AdditionalDevices, int AdditionalPanelUsers, string PayerEmail);

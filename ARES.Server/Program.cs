@@ -245,12 +245,11 @@ app.MapGet("/api/license", async (HttpContext context) =>
     LicenseInfo? license = await persistence.GetLicenseAsync(CurrentOrganization(context));
     return license is null ? Results.NotFound() : Results.Ok(new { license, canManagePlatform = IsPlatformAdmin(context) });
 });
-app.MapGet("/api/billing", async (HttpContext context) => Results.Ok(new
+app.MapGet("/api/billing", async (HttpContext context) =>
 {
-    configured = mercadoPago.IsConfigured,
-    usdArsRate = mercadoPago.UsdArsRate,
-    subscription = await persistence.GetBillingSubscriptionAsync(CurrentOrganization(context))
-}));
+    BillingSubscription? subscription = await persistence.GetBillingSubscriptionAsync(CurrentOrganization(context));
+    return Results.Json(new { configured = mercadoPago.IsConfigured, usdArsRate = mercadoPago.UsdArsRate, subscription });
+});
 app.MapPost("/api/billing/checkout", async (BillingCheckoutRequest request, HttpContext context, CancellationToken cancellationToken) =>
 {
     if (!IsOwner(context)) return Results.Forbid();
@@ -412,7 +411,7 @@ app.MapDelete("/api/account/sessions/{id:guid}", async (Guid id, HttpContext con
 {
     await persistence.RevokeAuthSessionAsync(CurrentAdmin(context).UserId, id); return Results.Ok(new { revoked = true });
 });
-app.MapGet("/api/account/login-events", async (HttpContext context) => Results.Ok(await persistence.GetLoginEventsAsync(CurrentAdmin(context).UserId)));
+app.MapGet("/api/account/login-events", async (HttpContext context) => Results.Json(await persistence.GetLoginEventsAsync(CurrentAdmin(context).UserId)));
 app.MapPost("/api/auth/mfa/verify", async (MfaVerifyRequest request, HttpContext context, CancellationToken cancellationToken) =>
 {
     AuthResult? result = await authService.VerifyMfaAsync(request.AccessToken, request.FactorId, request.Code, cancellationToken);

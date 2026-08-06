@@ -94,6 +94,17 @@ internal sealed class MercadoPagoService
         return selected.ValueKind == JsonValueKind.Object ? ReadAuthorizedPayment(selected) : null;
     }
 
+    public async Task<MercadoPagoAuthorizedPayment?> FindAuthorizedPaymentByPaymentIdAsync(string paymentId, CancellationToken cancellationToken)
+    {
+        if (!IsConfigured || string.IsNullOrWhiteSpace(paymentId)) return null;
+        using HttpResponseMessage response = await http.GetAsync($"/authorized_payments/search?payment_id={Uri.EscapeDataString(paymentId)}", cancellationToken);
+        if (!response.IsSuccessStatusCode) return null;
+        using JsonDocument document = JsonDocument.Parse(await response.Content.ReadAsStringAsync(cancellationToken));
+        if (!document.RootElement.TryGetProperty("results", out JsonElement results) || results.ValueKind != JsonValueKind.Array) return null;
+        JsonElement selected = results.EnumerateArray().FirstOrDefault();
+        return selected.ValueKind == JsonValueKind.Object ? ReadAuthorizedPayment(selected) : null;
+    }
+
     public bool ValidateWebhook(string dataId, string requestId, string signature)
     {
         if (string.IsNullOrWhiteSpace(webhookSecret)) return false;
@@ -162,3 +173,4 @@ internal sealed record MercadoPagoCreateResult(MercadoPagoSubscription? Subscrip
 internal sealed record MercadoPagoSubscription(string Id, string Status, string ExternalReference, string CheckoutUrl, decimal AmountArs, string PlanId);
 internal sealed record MercadoPagoAuthorizedPayment(string SubscriptionId, string PaymentStatus, DateTimeOffset? DebitDate);
 internal sealed record BillingCheckoutRequest(string Plan, int AdditionalDevices, int AdditionalPanelUsers);
+internal sealed record BillingPaymentReconcileRequest(string PaymentId);

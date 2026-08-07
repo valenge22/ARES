@@ -157,7 +157,6 @@ app.Use(async (context, next) =>
         context.Request.Path.Equals("/admin-license.js") ||
         context.Request.Path.Equals("/admin-operations.js") ||
         context.Request.Path.Equals("/portal-billing.js") ||
-        context.Request.Path.Equals("/portal-login.js") ||
         context.Request.Path.Equals("/api/downloads") ||
         context.Request.Path.StartsWithSegments("/health") ||
         context.Request.Path.StartsWithSegments("/solicitar") ||
@@ -247,13 +246,9 @@ app.MapGet("/portal", (HttpContext context) =>
     context.Response.Headers.CacheControl = "no-store, no-cache, must-revalidate";
     string html = File.ReadAllText(Path.Combine(app.Environment.ContentRootPath, "wwwroot", "portal.html"));
     html = html.Replace("onsubmit=\"login(event)\"", "onsubmit=\"submitLogin(event)\"")
-        .Replace("</body>", "<script src=\"/portal-login.js\"></script></body>");
+        .Replace("async function login(e)", "async function submitLogin(e)")
+        .Replace("email:email.value,password:password.value", "email:document.getElementById('email').value.trim(),password:document.getElementById('password').value");
     return Results.Content(html, "text/html; charset=utf-8");
-});
-app.MapGet("/portal-login.js", (HttpContext context) =>
-{
-    context.Response.Headers.CacheControl = "no-store, no-cache, must-revalidate";
-    return Results.File(Path.Combine(app.Environment.ContentRootPath, "wwwroot", "portal-login.js"), "application/javascript; charset=utf-8");
 });
 app.MapGet("/api/downloads", () => Results.Ok(new
 {

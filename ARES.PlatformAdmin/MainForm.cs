@@ -28,11 +28,12 @@ internal sealed class MainForm : Form
         search.TextChanged += (_, _) => ApplySearch();
         ConfigureGrid();
         var actions = new FlowLayoutPanel { Dock = DockStyle.Bottom, Height = 64, FlowDirection = FlowDirection.RightToLeft, Padding = new Padding(12), BackColor = Color.White };
+        var plans = ActionButton("Configurar planes", Color.FromArgb(79, 70, 229)); plans.Click += async (_, _) => await ShowPlansAsync();
         var remove = ActionButton("Eliminar cliente", Color.FromArgb(220, 38, 38)); remove.Click += async (_, _) => await DeleteSelectedAsync();
         var edit = ActionButton("Editar licencia", Color.FromArgb(37, 99, 235)); edit.Click += async (_, _) => await EditSelectedAsync();
         var details = ActionButton("Ver detalles", Color.FromArgb(2, 132, 199)); details.Click += (_, _) => ShowDetails();
         var support = ActionButton("Soporte", Color.FromArgb(14, 116, 144)); support.Click += async (_, _) => await ShowSupportAsync();
-        actions.Controls.Add(remove); actions.Controls.Add(edit); actions.Controls.Add(details); actions.Controls.Add(support);
+        actions.Controls.Add(remove); actions.Controls.Add(edit); actions.Controls.Add(details); actions.Controls.Add(support); actions.Controls.Add(plans);
         var body = new Panel { Dock = DockStyle.Fill, Padding = new Padding(24) }; body.Controls.Add(grid); body.Controls.Add(actions);
         Controls.Add(body); Controls.Add(metrics); Controls.Add(header); Shown += async (_, _) => await LoadAsync();
     }
@@ -158,6 +159,47 @@ internal sealed class MainForm : Form
         await LoadStaff(); dialog.ShowDialog(this);
     }
     private static DataGridView CreateReadOnlyGrid() => new() { Dock = DockStyle.Fill, ReadOnly = true, AutoGenerateColumns = true, AllowUserToAddRows = false, AllowUserToDeleteRows = false, RowHeadersVisible = false, BackgroundColor = Color.White, AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill };
+    private async Task ShowPlansAsync()
+    {
+        using var dialog = new Form { Text = "Planes comerciales ARES", Width = 1040, Height = 610, StartPosition = FormStartPosition.CenterParent, BackColor = Color.FromArgb(241, 245, 249) };
+        var gridPlans = new DataGridView { Dock = DockStyle.Fill, AutoGenerateColumns = false, AllowUserToAddRows = false, AllowUserToDeleteRows = false, RowHeadersVisible = false, BackgroundColor = Color.White, AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill };
+        gridPlans.Columns.AddRange(
+            new DataGridViewTextBoxColumn { HeaderText = "Código", DataPropertyName = nameof(PlanConfigurationDto.Code), ReadOnly = true },
+            new DataGridViewTextBoxColumn { HeaderText = "Nombre", DataPropertyName = nameof(PlanConfigurationDto.DisplayName) },
+            new DataGridViewTextBoxColumn { HeaderText = "Equipos", DataPropertyName = nameof(PlanConfigurationDto.IncludedDevices) },
+            new DataGridViewTextBoxColumn { HeaderText = "Usuarios", DataPropertyName = nameof(PlanConfigurationDto.IncludedPanelUsers) },
+            new DataGridViewTextBoxColumn { HeaderText = "USD/mes", DataPropertyName = nameof(PlanConfigurationDto.MonthlyPriceUsd) },
+            new DataGridViewTextBoxColumn { HeaderText = "USD/equipo extra", DataPropertyName = nameof(PlanConfigurationDto.AdditionalDeviceUsd) },
+            new DataGridViewTextBoxColumn { HeaderText = "USD/usuario extra", DataPropertyName = nameof(PlanConfigurationDto.AdditionalPanelUserUsd) },
+            new DataGridViewCheckBoxColumn { HeaderText = "Disponible", DataPropertyName = nameof(PlanConfigurationDto.Available) });
+        var save = ActionButton("Guardar configuración", Color.FromArgb(37, 99, 235)); save.Width = 190;
+        var note = new Label { AutoSize = true, Text = "Los cambios aplican a nuevas compras; los contratos activos conservan sus condiciones.", ForeColor = Color.FromArgb(71, 85, 105), Margin = new Padding(18, 12, 0, 0) };
+        var footer = new FlowLayoutPanel { Dock = DockStyle.Bottom, Height = 58, FlowDirection = FlowDirection.RightToLeft, Padding = new Padding(10), BackColor = Color.White }; footer.Controls.Add(save); footer.Controls.Add(note);
+        dialog.Controls.Add(gridPlans); dialog.Controls.Add(footer);
+        try
+        {
+            using HttpClient http = PlatformAuth.Client.CreateHttpClient();
+            List<PlanConfigurationDto> plans = await http.GetFromJsonAsync<List<PlanConfigurationDto>>($"{PlatformAuth.ServerUrl}/api/platform/plans") ?? [];
+            gridPlans.DataSource = plans;
+            save.Click += async (_, _) =>
+            {
+                try
+                {
+                    save.Enabled = false;
+                    foreach (PlanConfigurationDto plan in plans)
+                    {
+                        using HttpResponseMessage response = await http.PutAsJsonAsync($"{PlatformAuth.ServerUrl}/api/platform/plans/{Uri.EscapeDataString(plan.Code)}", plan);
+                        await EnsureSuccessAsync(response);
+                    }
+                    MessageBox.Show("Planes actualizados. Las nuevas compras usarán estos valores.", "ARES", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                }
+                catch (Exception ex) { MessageBox.Show(ex.Message, "Planes ARES", MessageBoxButtons.OK, MessageBoxIcon.Error); }
+                finally { save.Enabled = true; }
+            };
+            dialog.ShowDialog(this);
+        }
+        catch (Exception ex) { MessageBox.Show(ex.Message, "Planes ARES", MessageBoxButtons.OK, MessageBoxIcon.Error); }
+    }
     private async Task ShowBillingAsync()
     {
         using var dialog = new Form { Text = "Facturación global de ARES", Width = 1180, Height = 680, StartPosition = FormStartPosition.CenterParent, BackColor = Color.FromArgb(241, 245, 249) };
@@ -284,6 +326,18 @@ internal sealed class OrganizationLicense
     public int MaxDevices { get; set; } public int AdditionalDevices { get; set; } public int TotalDevices { get; set; } public long UsedDevices { get; set; } public int MaxPanelUsers { get; set; } public int AdditionalPanelUsers { get; set; } public int TotalPanelUsers { get; set; } public long UsedPanelUsers { get; set; }
     public decimal MonthlyPriceUsd { get; set; } public int GraceDays { get; set; } public DateTimeOffset? ExpiresAt { get; set; } public DateTimeOffset? AccessEndsAt { get; set; }
     public string DevicesText => $"{UsedDevices}/{TotalDevices}"; public string UsersText => $"{UsedPanelUsers}/{TotalPanelUsers}"; public string ExpirationText => AccessEndsAt?.ToLocalTime().ToString("dd/MM/yyyy") ?? "Sin vencimiento";
+}
+
+internal sealed class PlanConfigurationDto
+{
+    public string Code { get; set; } = "";
+    public string DisplayName { get; set; } = "";
+    public int IncludedDevices { get; set; }
+    public int IncludedPanelUsers { get; set; }
+    public decimal MonthlyPriceUsd { get; set; }
+    public decimal AdditionalDeviceUsd { get; set; }
+    public decimal AdditionalPanelUserUsd { get; set; }
+    public bool Available { get; set; }
 }
 
 internal sealed class PlatformPayment

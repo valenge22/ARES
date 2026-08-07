@@ -17,3 +17,25 @@ openEditor=function(i){const x=items[i];$('editId').value=x.organizationId;$('ed
 saveLicense=async function(e){e.preventDefault();try{await api(`/api/platform/organizations/${$('editId').value}/license`,{method:'PUT',body:JSON.stringify({plan:$('editPlan').value,status:$('editStatus').value,maxDevices:+$('editMax').value,maxPanelUsers:+$('editMaxUsers').value,additionalDevices:+$('editAdditionalDevices').value,additionalPanelUsers:+$('editAdditionalUsers').value,graceDays:+$('editGrace').value,expiresAt:$('editExpires').value?new Date($('editExpires').value+'T23:59:59-03:00').toISOString():null})});$('editor').close();await loadOrganizations()}catch(x){$('editError').textContent=x.message}};
 const operationsScript=document.createElement('script');operationsScript.src='/admin-operations.js';operationsScript.defer=true;document.head.appendChild(operationsScript);
 const downloadsScript=document.createElement('script');downloadsScript.src='/admin-downloads.js';downloadsScript.defer=true;document.head.appendChild(downloadsScript);
+
+document.addEventListener('DOMContentLoaded',()=>{
+  const update=[...document.querySelectorAll('button')].find(x=>x.textContent.trim()==='Actualizar'&&x.getAttribute('onclick')==='loadOrganizations()');
+  if(update){const plans=document.createElement('button');plans.className='secondary';plans.textContent='Configurar planes';plans.onclick=managePlans;update.parentElement.insertBefore(plans,update)}
+});
+
+async function managePlans(){
+  try{
+    const plans=await api('/api/platform/plans');
+    const dialog=document.createElement('dialog');dialog.style.width='min(930px,96vw)';
+    dialog.innerHTML='<form method="dialog"><h2>Planes comerciales</h2><p class="muted">Los cambios se aplican a nuevas compras. No modifican automáticamente contratos ya activos.</p><div class="table" style="overflow:auto"><table><thead><tr><th>Plan</th><th>Nombre visible</th><th>Equipos incluidos</th><th>Usuarios incluidos</th><th>USD/mes</th><th>USD/equipo extra</th><th>USD/usuario extra</th><th>Disponible</th><th></th></tr></thead><tbody></tbody></table></div><div style="display:flex;justify-content:flex-end;margin-top:20px"><button>Cerrar</button></div></form>';
+    const body=dialog.querySelector('tbody');
+    plans.forEach(plan=>{
+      const row=document.createElement('tr'); const code=esc(plan.code);
+      row.innerHTML=`<td><b>${code}</b></td><td><input value="${esc(plan.displayName)}" maxlength="40"></td><td><input type="number" min="0" max="100000" value="${plan.includedDevices}"></td><td><input type="number" min="0" max="10000" value="${plan.includedPanelUsers}"></td><td><input type="number" min="0" step="0.01" value="${plan.monthlyPriceUsd}"></td><td><input type="number" min="0" step="0.01" value="${plan.additionalDeviceUsd}"></td><td><input type="number" min="0" step="0.01" value="${plan.additionalPanelUserUsd}"></td><td><input type="checkbox" ${plan.available?'checked':''} ${plan.code==='Trial'?'disabled':''}></td><td><button type="button" class="primary">Guardar</button></td>`;
+      const input=row.querySelectorAll('input'), save=row.querySelector('button');
+      save.onclick=async()=>{save.disabled=true;try{const x={displayName:input[0].value,includedDevices:+input[1].value,includedPanelUsers:+input[2].value,monthlyPriceUsd:+input[3].value,additionalDeviceUsd:+input[4].value,additionalPanelUserUsd:+input[5].value,available:input[6].checked};const updated=await api(`/api/platform/plans/${encodeURIComponent(plan.code)}`,{method:'PUT',body:JSON.stringify(x)});aresPlans[updated.code]={name:updated.displayName,devices:updated.includedDevices,users:updated.includedPanelUsers,base:updated.monthlyPriceUsd,device:updated.additionalDeviceUsd,user:updated.additionalPanelUserUsd};save.textContent='Guardado';setTimeout(()=>save.textContent='Guardar',1200)}catch(e){alert(e.message)}finally{save.disabled=false}};
+      body.appendChild(row);
+    });
+    document.body.appendChild(dialog);dialog.addEventListener('close',()=>dialog.remove());dialog.showModal();
+  }catch(e){alert(e.message)}
+}

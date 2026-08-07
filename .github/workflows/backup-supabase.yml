@@ -1,0 +1,39 @@
+name: Respaldo cifrado de Supabase
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '30 6 * * *'
+
+permissions:
+  contents: read
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Instalar cliente PostgreSQL
+        run: sudo apt-get update && sudo apt-get install -y postgresql-client
+      - name: Generar respaldo lógico
+        env:
+          DATABASE_URL: ${{ secrets.SUPABASE_BACKUP_CONNECTION }}
+        run: |
+          test -n "$DATABASE_URL"
+          pg_dump "$DATABASE_URL" --format=custom --no-owner --no-privileges --file ares-supabase.dump
+      - name: Cifrar respaldo
+        env:
+          BACKUP_PASSPHRASE: ${{ secrets.ARES_BACKUP_PASSPHRASE }}
+        run: |
+          test -n "$BACKUP_PASSPHRASE"
+          gpg --batch --yes --symmetric --cipher-algo AES256 --passphrase "$BACKUP_PASSPHRASE" --output ares-supabase.dump.gpg ares-supabase.dump
+          sha256sum ares-supabase.dump.gpg > ares-supabase.dump.gpg.sha256
+          rm -f ares-supabase.dump
+      - name: Guardar respaldo cifrado por 30 días
+        uses: actions/upload-artifact@v4
+        with:
+          name: ares-supabase-${{ github.run_id }}
+          path: |
+            ares-supabase.dump.gpg
+            ares-supabase.dump.gpg.sha256
+          retention-days: 30

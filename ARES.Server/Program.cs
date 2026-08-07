@@ -151,6 +151,7 @@ app.Use(async (context, next) =>
 app.Use(async (context, next) =>
 {
     bool publicPath = context.Request.Path.Equals("/") ||
+        context.Request.Path.Equals("/legal") ||
         context.Request.Path.Equals("/portal") ||
         context.Request.Path.Equals("/admin-ares") ||
         context.Request.Path.Equals("/admin-mfa.js") ||
@@ -241,7 +242,14 @@ app.MapGet("/health", () => Results.Ok(new
     ,billing = mercadoPago.IsConfigured ? "mercadopago" : "not-configured"
 }));
 
-app.MapGet("/", () => Results.File(Path.Combine(app.Environment.ContentRootPath, "wwwroot", "index.html"), "text/html; charset=utf-8"));
+app.MapGet("/", () =>
+{
+    string html = File.ReadAllText(Path.Combine(app.Environment.ContentRootPath, "wwwroot", "index.html"))
+        .Replace("14 días", "7 días")
+        .Replace("</footer>", " · <a href=\"/legal\" style=\"color:#bae6fd\">Información legal</a></footer>");
+    return Results.Content(html, "text/html; charset=utf-8");
+});
+app.MapGet("/legal", () => Results.File(Path.Combine(app.Environment.ContentRootPath, "wwwroot", "legal.html"), "text/html; charset=utf-8"));
 app.MapGet("/portal", (HttpContext context) =>
 {
     context.Response.Headers.CacheControl = "no-store, no-cache, must-revalidate";

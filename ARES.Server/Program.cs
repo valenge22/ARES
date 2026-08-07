@@ -515,22 +515,29 @@ app.MapGet("/api/platform/organizations", async (HttpContext context) =>
     IsPlatformAdmin(context) ? Results.Ok(await persistence.GetLicensesAsync()) : Results.Forbid());
 app.MapGet("/api/platform/plans", (HttpContext context) =>
     IsPlatformAdmin(context) ? Results.Ok(planConfigurations.Values.OrderBy(x => PlanSortOrder(x.Code))) : Results.Forbid());
-app.MapGet("/api/plans", () => Results.Ok(planConfigurations.Values.Where(x => x.Available).OrderBy(x => PlanSortOrder(x.Code))));
+app.MapGet("/api/plans", () => Results.Ok(planConfigurations.Values.Where(x => x.Available).OrderBy(x => PlanSortOrder(x.Code)).Select(x => new
+{
+    x.Code, x.DisplayName, x.IncludedDevices, x.IncludedPanelUsers, x.MonthlyPriceUsd, x.AdditionalDeviceUsd, x.AdditionalPanelUserUsd,
+    x.DiscountPercent, x.DiscountEndsAt, x.PromotionLabel, EffectiveMonthlyPriceUsd = EffectiveMonthlyPriceUsd(x)
+})));
 app.MapPut("/api/platform/plans/{code}", async (string code, UpdatePlanConfigurationRequest request, HttpContext context) =>
 {
     if (!IsPlatformOwner(context)) return Results.Forbid();
     if (!planConfigurations.TryGetValue(code, out PlanConfiguration? current)) return Results.NotFound();
     string displayName = request.DisplayName?.Trim() ?? "";
     if (displayName.Length is < 2 or > 40 || request.IncludedDevices is < 0 or > 100000 || request.IncludedPanelUsers is < 0 or > 10000 ||
-        request.MonthlyPriceUsd is < 0 or > 100000 || request.AdditionalDeviceUsd is < 0 or > 10000 || request.AdditionalPanelUserUsd is < 0 or > 10000 ||
+        request.MonthlyPriceUsd is < 0 or > 100000 || request.AdditionalDeviceUsd is < 0 or > 10000 || request.AdditionalPanelUserUsd is < 0 or > 10000 || request.DiscountPercent is < 0 or > 100 ||
         (current.Code == "Trial" && request.MonthlyPriceUsd != 0))
         return Results.BadRequest(new { error = "Revisá el nombre, límites y precios del plan." });
+    string promotionLabel = request.PromotionLabel?.Trim() ?? "";
+    if (promotionLabel.Length > 80) return Results.BadRequest(new { error = "El nombre de la promoción es demasiado largo." });
     var updated = new PlanConfiguration(current.Code, displayName, request.IncludedDevices, request.IncludedPanelUsers,
-        decimal.Round(request.MonthlyPriceUsd, 2), decimal.Round(request.AdditionalDeviceUsd, 2), decimal.Round(request.AdditionalPanelUserUsd, 2), request.Available || current.Code == "Trial");
+        decimal.Round(request.MonthlyPriceUsd, 2), decimal.Round(request.AdditionalDeviceUsd, 2), decimal.Round(request.AdditionalPanelUserUsd, 2), request.Available || current.Code == "Trial",
+        decimal.Round(request.DiscountPercent, 2), request.DiscountEndsAt, promotionLabel);
     planConfigurations[current.Code] = updated;
     await persistence.SaveAsync("platform:plans", planConfigurations.Values.OrderBy(x => PlanSortOrder(x.Code)).ToList());
     AuthenticatedAdmin actor = CurrentAdmin(context);
-    await persistence.AddPlatformAuditAsync(actor.UserId, actor.DisplayName, null, "PLAN_ACTUALIZADO", $"{updated.Code}: {updated.DisplayName}; USD {updated.MonthlyPriceUsd:N2}/mes; equipos {updated.IncludedDevices}; usuarios {updated.IncludedPanelUsers}.");
+    await persistence.AddPlatformAuditAsync(actor.UserId, actor.DisplayName, null, "PLAN_ACTUALIZADO", $"{updated.Code}: {updated.DisplayName}; USD {updated.MonthlyPriceUsd:N2}/mes; equipos {updated.IncludedDevices}; usuarios {updated.IncludedPanelUsers}; promoción {updated.DiscountPercent:N2}%.");
     return Results.Ok(updated);
 });
 app.MapGet("/api/platform/downloads", (HttpContext context) =>
@@ -1721,8 +1728,12 @@ PlanDefinition PlanDetails(string plan)
         ? value
         : planConfigurations["Trial"];
     return new(configured.DisplayName, configured.IncludedDevices, configured.IncludedPanelUsers,
-        configured.MonthlyPriceUsd, configured.AdditionalDeviceUsd, configured.AdditionalPanelUserUsd);
+        EffectiveMonthlyPriceUsd(configured), configured.AdditionalDeviceUsd, configured.AdditionalPanelUserUsd);
 }
+decimal EffectiveMonthlyPriceUsd(PlanConfiguration plan) => plan.DiscountPercent > 0 &&
+    (!plan.DiscountEndsAt.HasValue || plan.DiscountEndsAt.Value > DateTimeOffset.UtcNow)
+    ? decimal.Round(plan.MonthlyPriceUsd * (1m - plan.DiscountPercent / 100m), 2)
+    : plan.MonthlyPriceUsd;
 List<PlanConfiguration> DefaultPlanConfigurations() =>
 [
     new("Trial", "Prueba", 5, 1, 0m, 0m, 0m, true),

@@ -11,7 +11,7 @@ let billingConfig=null;
 async function loadBillingPlans(){
   const plans=asArray(await api('/api/plans')).filter(x=>x.code!=='Trial');
   for(const key of Object.keys(billingPlans))delete billingPlans[key];
-  plans.forEach(x=>billingPlans[x.code]={name:x.displayName,devices:x.includedDevices,users:x.includedPanelUsers,base:+x.monthlyPriceUsd,device:+x.additionalDeviceUsd,user:+x.additionalPanelUserUsd});
+  plans.forEach(x=>billingPlans[x.code]={name:x.displayName,devices:x.includedDevices,users:x.includedPanelUsers,base:+x.effectiveMonthlyPriceUsd,device:+x.additionalDeviceUsd,user:+x.additionalPanelUserUsd,promotionLabel:x.promotionLabel,discountPercent:+x.discountPercent});
   const current=billingPlan.value; billingPlan.innerHTML=Object.entries(billingPlans).map(([id,x])=>`<option value="${id}">${esc(x.name)}</option>`).join('');
   if(billingPlans[current])billingPlan.value=current;
 }

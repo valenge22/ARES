@@ -171,6 +171,9 @@ internal sealed class MainForm : Form
             new DataGridViewTextBoxColumn { HeaderText = "USD/mes", DataPropertyName = nameof(PlanConfigurationDto.MonthlyPriceUsd) },
             new DataGridViewTextBoxColumn { HeaderText = "USD/equipo extra", DataPropertyName = nameof(PlanConfigurationDto.AdditionalDeviceUsd) },
             new DataGridViewTextBoxColumn { HeaderText = "USD/usuario extra", DataPropertyName = nameof(PlanConfigurationDto.AdditionalPanelUserUsd) },
+            new DataGridViewTextBoxColumn { HeaderText = "Descuento %", DataPropertyName = nameof(PlanConfigurationDto.DiscountPercent) },
+            new DataGridViewTextBoxColumn { HeaderText = "Promoción", DataPropertyName = nameof(PlanConfigurationDto.PromotionLabel) },
+            new DataGridViewTextBoxColumn { HeaderText = "Vence promoción", DataPropertyName = nameof(PlanConfigurationDto.DiscountEndsAt) },
             new DataGridViewCheckBoxColumn { HeaderText = "Disponible", DataPropertyName = nameof(PlanConfigurationDto.Available) });
         var save = ActionButton("Guardar configuración", Color.FromArgb(37, 99, 235)); save.Width = 190;
         var note = new Label { AutoSize = true, Text = "Los cambios aplican a nuevas compras; los contratos activos conservan sus condiciones.", ForeColor = Color.FromArgb(71, 85, 105), Margin = new Padding(18, 12, 0, 0) };
@@ -337,6 +340,9 @@ internal sealed class PlanConfigurationDto
     public decimal MonthlyPriceUsd { get; set; }
     public decimal AdditionalDeviceUsd { get; set; }
     public decimal AdditionalPanelUserUsd { get; set; }
+    public decimal DiscountPercent { get; set; }
+    public DateTimeOffset? DiscountEndsAt { get; set; }
+    public string PromotionLabel { get; set; } = "";
     public bool Available { get; set; }
 }
 

@@ -272,7 +272,9 @@ internal sealed record UpdateLicenseRequest(string Plan, string Status, int MaxD
 internal sealed record PlanDefinition(string DisplayName, int IncludedDevices, int IncludedPanelUsers,
     decimal MonthlyPriceUsd, decimal AdditionalDeviceUsd, decimal AdditionalPanelUserUsd);
 internal sealed record PlanConfiguration(string Code, string DisplayName, int IncludedDevices, int IncludedPanelUsers,
-    decimal MonthlyPriceUsd, decimal AdditionalDeviceUsd, decimal AdditionalPanelUserUsd, bool Available = true);
+    decimal MonthlyPriceUsd, decimal AdditionalDeviceUsd, decimal AdditionalPanelUserUsd, bool Available = true,
+    decimal DiscountPercent = 0m, DateTimeOffset? DiscountEndsAt = null, string PromotionLabel = "");
 internal sealed record UpdatePlanConfigurationRequest(string? DisplayName, int IncludedDevices, int IncludedPanelUsers,
-    decimal MonthlyPriceUsd, decimal AdditionalDeviceUsd, decimal AdditionalPanelUserUsd, bool Available = true);
+    decimal MonthlyPriceUsd, decimal AdditionalDeviceUsd, decimal AdditionalPanelUserUsd, bool Available = true,
+    decimal DiscountPercent = 0m, DateTimeOffset? DiscountEndsAt = null, string? PromotionLabel = "");
 internal sealed record EnrollDeviceRequest(string Code, string DeviceId, string MachineName);

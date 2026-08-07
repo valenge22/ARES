@@ -238,6 +238,15 @@ internal sealed class AresPersistence
                 updated_at timestamptz not null default now(),
                 unique(provider,provider_payment_id)
             );
+            create table if not exists ares_platform_audit_events (
+                event_id uuid primary key,
+                actor_user_id uuid not null,
+                actor_name varchar(80) not null,
+                organization_id uuid,
+                action varchar(80) not null,
+                detail text not null,
+                occurred_at timestamptz not null default now()
+            );
 
             alter table ares_state enable row level security;
             alter table ares_admin_users enable row level security;
@@ -251,6 +260,7 @@ internal sealed class AresPersistence
             alter table ares_mfa_recovery_codes enable row level security;
             alter table ares_billing_subscriptions enable row level security;
             alter table ares_billing_payments enable row level security;
+            alter table ares_platform_audit_events enable row level security;
 
             revoke all on table ares_state from anon, authenticated;
             revoke all on table ares_admin_users from anon, authenticated;
@@ -264,8 +274,31 @@ internal sealed class AresPersistence
             revoke all on table ares_mfa_recovery_codes from anon, authenticated;
             revoke all on table ares_billing_subscriptions from anon, authenticated;
             revoke all on table ares_billing_payments from anon, authenticated;
+            revoke all on table ares_platform_audit_events from anon, authenticated;
             """;
         await command.ExecuteNonQueryAsync();
+    }
+
+    public async Task AddPlatformAuditAsync(Guid actorUserId, string actorName, Guid? organizationId, string action, string detail)
+    {
+        if (!UsesDatabase) return;
+        await using var connection = new NpgsqlConnection(connectionString); await connection.OpenAsync();
+        await using var command = connection.CreateCommand();
+        command.CommandText = "insert into ares_platform_audit_events(event_id,actor_user_id,actor_name,organization_id,action,detail) values(@id,@actor,@name,@org,@action,@detail)";
+        command.Parameters.AddWithValue("id", Guid.NewGuid()); command.Parameters.AddWithValue("actor", actorUserId);
+        command.Parameters.AddWithValue("name", actorName); command.Parameters.AddWithValue("org", (object?)organizationId ?? DBNull.Value);
+        command.Parameters.AddWithValue("action", action); command.Parameters.AddWithValue("detail", detail); await command.ExecuteNonQueryAsync();
+    }
+
+    public async Task<List<PlatformAuditEvent>> GetPlatformAuditAsync()
+    {
+        var result = new List<PlatformAuditEvent>(); if (!UsesDatabase) return result;
+        await using var connection = new NpgsqlConnection(connectionString); await connection.OpenAsync();
+        await using var command = connection.CreateCommand();
+        command.CommandText = "select event_id,actor_name,organization_id,action,detail,occurred_at from ares_platform_audit_events order by occurred_at desc limit 300";
+        await using var reader = await command.ExecuteReaderAsync();
+        while (await reader.ReadAsync()) result.Add(new(reader.GetGuid(0), reader.GetString(1), reader.IsDBNull(2) ? null : reader.GetGuid(2), reader.GetString(3), reader.GetString(4), reader.GetFieldValue<DateTimeOffset>(5)));
+        return result;
     }
 
     public async Task ReplaceMfaRecoveryCodesAsync(Guid userId, IReadOnlyCollection<byte[]> hashes)
@@ -1053,6 +1086,7 @@ internal sealed record BillingPayment(Guid PaymentId, Guid OrganizationId, strin
 internal sealed record PlatformBillingPayment(Guid PaymentId, Guid OrganizationId, string OrganizationName, string ProviderPaymentId,
     string Plan, decimal AmountArs, string Status, DateTimeOffset? PeriodStart, DateTimeOffset? PeriodEnd,
     string ReceiptUrl, DateTimeOffset OccurredAt);
+internal sealed record PlatformAuditEvent(Guid EventId, string ActorName, Guid? OrganizationId, string Action, string Detail, DateTimeOffset OccurredAt);
 internal sealed record LoginEventInfo(string ClientName, string IpAddress, bool Successful, DateTimeOffset OccurredAt);
 internal sealed record RegistrationRequestInfo(Guid UserId, string Email, string DisplayName, string Status, DateTimeOffset RequestedAt, DateTimeOffset? ReviewedAt);
 internal sealed record InvitationInfo(Guid InvitationId, string CodePrefix, int MaxUses, int UsedCount, DateTimeOffset ExpiresAt, bool Revoked, DateTimeOffset CreatedAt);

@@ -150,6 +150,7 @@ app.Use(async (context, next) =>
         context.Request.Path.Equals("/admin-ares") ||
         context.Request.Path.Equals("/admin-mfa.js") ||
         context.Request.Path.Equals("/admin-license.js") ||
+        context.Request.Path.Equals("/admin-operations.js") ||
         context.Request.Path.Equals("/portal-billing.js") ||
         context.Request.Path.Equals("/api/downloads") ||
         context.Request.Path.StartsWithSegments("/health") ||
@@ -252,6 +253,11 @@ app.MapGet("/admin-license.js", (HttpContext context) =>
 {
     context.Response.Headers.CacheControl = "no-store, no-cache, must-revalidate";
     return Results.File(Path.Combine(app.Environment.ContentRootPath, "wwwroot", "admin-license.js"), "application/javascript; charset=utf-8");
+});
+app.MapGet("/admin-operations.js", (HttpContext context) =>
+{
+    context.Response.Headers.CacheControl = "no-store";
+    return Results.File(Path.Combine(app.Environment.ContentRootPath, "wwwroot", "admin-operations.js"), "application/javascript; charset=utf-8");
 });
 app.MapGet("/portal-billing.js", (HttpContext context) =>
 {
@@ -470,6 +476,30 @@ app.MapPost("/api/billing/mercadopago/webhook", async (HttpContext context, Json
 });
 app.MapGet("/api/platform/organizations", async (HttpContext context) =>
     IsPlatformAdmin(context) ? Results.Ok(await persistence.GetLicensesAsync()) : Results.Forbid());
+app.MapGet("/api/platform/overview", async (HttpContext context) =>
+{
+    if (!IsPlatformAdmin(context)) return Results.Forbid();
+    List<LicenseInfo> licenses = await persistence.GetLicensesAsync();
+    DateTimeOffset onlineCutoff = DateTimeOffset.UtcNow.AddSeconds(-35);
+    var alerts = licenses.Where(x => x.AccessStatus is "Expired" or "PastDue" ||
+            (x.AccessEndsAt.HasValue && x.AccessEndsAt.Value <= DateTimeOffset.UtcNow.AddDays(7)))
+        .Select(x => new { x.OrganizationId, OrganizationName = x.OrganizationName, Type = x.AccessStatus is "Expired" or "PastDue" ? "Licencia" : "Vencimiento próximo", x.AccessStatus, x.AccessEndsAt }).ToList();
+    foreach (LicenseInfo license in licenses)
+    {
+        long connected = agents.Values.LongCount(a => a.OrganizationId == license.OrganizationId && a.UltimaConexionUtc >= onlineCutoff);
+        if (license.UsedDevices > 0 && connected == 0)
+            alerts.Add(new { license.OrganizationId, OrganizationName = license.OrganizationName, Type = "Sin equipos conectados", AccessStatus = "Atención", AccessEndsAt = (DateTimeOffset?)null });
+    }
+    return Results.Ok(new { alerts, audit = await persistence.GetPlatformAuditAsync() });
+});
+app.MapGet("/api/platform/organizations/{id:guid}/support", async (Guid id, HttpContext context) =>
+{
+    if (!IsPlatformAdmin(context)) return Results.Forbid();
+    DateTimeOffset cutoff = DateTimeOffset.UtcNow.AddSeconds(-35);
+    var devices = agents.Values.Where(a => a.OrganizationId == id).Select(a => new { a.Equipo, a.Usuario, a.Version, Online = a.UltimaConexionUtc >= cutoff, a.UltimaConexionUtc, a.BloqueadoAdministrativamente, a.SolicitudDesbloqueoPendiente }).OrderBy(x => x.Equipo).ToList();
+    var events = audit.Where(x => x.OrganizationId == id).OrderByDescending(x => x.FechaUtc).Take(30).ToList();
+    return Results.Ok(new { devices, events });
+});
 app.MapGet("/api/platform/billing/history", async (HttpContext context) =>
     IsPlatformAdmin(context) ? Results.Ok(await persistence.GetAllBillingPaymentsAsync()) : Results.Forbid());
 app.MapPut("/api/platform/organizations/{id:guid}/license", async (Guid id, UpdateLicenseRequest request, HttpContext context) =>
@@ -486,6 +516,8 @@ app.MapPut("/api/platform/organizations/{id:guid}/license", async (Guid id, Upda
         request.AdditionalPanelUsers * definition.AdditionalPanelUserUsd;
     await persistence.UpdateLicenseAsync(id, plan, status, includedDevices, request.AdditionalDevices, includedUsers,
         request.AdditionalPanelUsers, monthlyPrice, request.ExpiresAt, request.GraceDays);
+    AuthenticatedAdmin actor = CurrentAdmin(context);
+    await persistence.AddPlatformAuditAsync(actor.UserId, actor.DisplayName, id, "LICENCIA_ACTUALIZADA", $"Plan {plan}; estado {status}; equipos {includedDevices + request.AdditionalDevices}; usuarios {includedUsers + request.AdditionalPanelUsers}.");
     return Results.Ok(new { updated = true });
 });
 app.MapDelete("/api/platform/organizations/{id:guid}", async (Guid id, HttpContext context) =>
@@ -494,6 +526,8 @@ app.MapDelete("/api/platform/organizations/{id:guid}", async (Guid id, HttpConte
     if (id == AresPersistence.DefaultOrganizationId || id == CurrentOrganization(context))
         return Results.BadRequest(new { error = "No se puede eliminar la organización principal o la organización de tu sesión." });
     await persistence.ArchiveOrganizationAsync(id);
+    AuthenticatedAdmin actor = CurrentAdmin(context);
+    await persistence.AddPlatformAuditAsync(actor.UserId, actor.DisplayName, id, "ORGANIZACION_ARCHIVADA", "La organización fue archivada y sus accesos revocados.");
     return Results.Ok(new { archived = true });
 });
 

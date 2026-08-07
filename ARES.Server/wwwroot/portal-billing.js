@@ -8,6 +8,15 @@ document.addEventListener('DOMContentLoaded',()=>{
   document.querySelector('.nav[data-page="licencia"]').addEventListener('click',loadBillingHistory);
 });
 let billingConfig=null;
+async function loadBillingPlans(){
+  const plans=asArray(await api('/api/plans')).filter(x=>x.code!=='Trial');
+  for(const key of Object.keys(billingPlans))delete billingPlans[key];
+  plans.forEach(x=>billingPlans[x.code]={name:x.displayName,devices:x.includedDevices,users:x.includedPanelUsers,base:+x.monthlyPriceUsd,device:+x.additionalDeviceUsd,user:+x.additionalPanelUserUsd});
+  const current=billingPlan.value; billingPlan.innerHTML=Object.entries(billingPlans).map(([id,x])=>`<option value="${id}">${esc(x.name)}</option>`).join('');
+  if(billingPlans[current])billingPlan.value=current;
+}
+const originalLoadBilling=loadBilling;
+loadBilling=async function(){await loadBillingPlans();return originalLoadBilling()};
 async function loadBilling(){if(me?.role!=='Owner')return;billingBox.classList.remove('hidden');try{billingConfig=await api('/api/billing');const refreshed=await api('/api/license');licenseData=refreshed;renderLicense(refreshed.license);renderBillingPrice();const s=billingConfig.subscription;if(s){billingMessage.textContent=`Mercado Pago: ${billingStatusName(s.status)}${s.lastPaymentStatus?` · Último pago: ${billingStatusName(s.lastPaymentStatus)}`:''}`;billingCancel.textContent=s.status==='pending'?'Descartar intento':'Cancelar renovación';billingCancel.classList.toggle('hidden',!['authorized','pending','paused'].includes(s.status));billingReconcile.classList.toggle('hidden',!!s.lastPaymentStatus)}if(!billingConfig.configured)billingMessage.textContent='Los pagos todavía no fueron configurados por ARES.'}catch(x){billingMessage.textContent=x.message}}
 function renderBillingPrice(){const p=billingPlans[billingPlan.value],d=+billingDevices.value||0,u=+billingUsers.value||0,usd=p.base+d*p.device+u*p.user,ars=usd*(billingConfig?.usdArsRate||0);billingSummary.innerHTML=`<b>${p.name}</b>: ${p.devices+d} equipos y ${p.users+u} usuarios.<br><b>USD ${usd.toFixed(2)}</b> por mes${ars?` · <b>ARS ${ars.toLocaleString('es-AR',{minimumFractionDigits:2})}</b>`:''}`}
 async function startBillingCheckout(){if(!billingConfig?.configured){billingMessage.textContent='Mercado Pago todavía no está configurado.';return}billingCheckout.disabled=true;billingMessage.textContent='Creando suscripción segura…';try{const x=await api('/api/billing/checkout',{method:'POST',body:JSON.stringify({plan:billingPlan.value,additionalDevices:+billingDevices.value||0,additionalPanelUsers:+billingUsers.value||0})});location.href=x.checkoutUrl}catch(x){billingMessage.textContent=x.message;billingCheckout.disabled=false}}

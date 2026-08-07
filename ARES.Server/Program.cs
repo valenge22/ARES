@@ -24,6 +24,13 @@ await persistence.EnsurePlatformOwnerAsync(
     builder.Configuration["ARES_OWNER_NAME"] ?? Environment.GetEnvironmentVariable("ARES_OWNER_NAME"));
 var authService = new AresAuthService(builder.Configuration, persistence);
 var mercadoPago = new MercadoPagoService(builder.Configuration);
+List<PlanConfiguration> storedPlanConfigurations = await persistence.LoadAsync<List<PlanConfiguration>>("platform:plans") ?? [];
+if (storedPlanConfigurations.Count == 0)
+{
+    storedPlanConfigurations = DefaultPlanConfigurations();
+    await persistence.SaveAsync("platform:plans", storedPlanConfigurations);
+}
+var planConfigurations = new ConcurrentDictionary<string, PlanConfiguration>(storedPlanConfigurations.ToDictionary(x => x.Code, StringComparer.OrdinalIgnoreCase), StringComparer.OrdinalIgnoreCase);
 string platformAdminUserId = builder.Configuration["ARES_PLATFORM_ADMIN_USER_ID"]
     ?? Environment.GetEnvironmentVariable("ARES_PLATFORM_ADMIN_USER_ID")
     ?? builder.Configuration["ARES_OWNER_USER_ID"]
@@ -394,6 +401,8 @@ app.MapPost("/api/billing/checkout", async (BillingCheckoutRequest request, Http
         return Results.BadRequest(new { error = "Ya existe una suscripción activa. La modificación de planes se habilitará desde Administrar suscripción." });
     if (existing is not null && existing.Status == "pending" && !string.IsNullOrWhiteSpace(existing.ProviderSubscriptionId))
         await mercadoPago.CancelSubscriptionOrPlanAsync(existing.ProviderSubscriptionId, cancellationToken);
+    if (!planConfigurations.TryGetValue(plan, out PlanConfiguration? selectedPlan) || !selectedPlan.Available)
+        return Results.BadRequest(new { error = "El plan elegido no está disponible." });
     PlanDefinition definition = PlanDetails(plan);
     decimal usd = definition.MonthlyPriceUsd + request.AdditionalDevices * definition.AdditionalDeviceUsd + request.AdditionalPanelUsers * definition.AdditionalPanelUserUsd;
     decimal ars = decimal.Round(usd * mercadoPago.UsdArsRate, 2);
@@ -504,6 +513,26 @@ app.MapPost("/api/billing/mercadopago/webhook", async (HttpContext context, Json
 });
 app.MapGet("/api/platform/organizations", async (HttpContext context) =>
     IsPlatformAdmin(context) ? Results.Ok(await persistence.GetLicensesAsync()) : Results.Forbid());
+app.MapGet("/api/platform/plans", (HttpContext context) =>
+    IsPlatformAdmin(context) ? Results.Ok(planConfigurations.Values.OrderBy(x => PlanSortOrder(x.Code))) : Results.Forbid());
+app.MapGet("/api/plans", () => Results.Ok(planConfigurations.Values.Where(x => x.Available).OrderBy(x => PlanSortOrder(x.Code))));
+app.MapPut("/api/platform/plans/{code}", async (string code, UpdatePlanConfigurationRequest request, HttpContext context) =>
+{
+    if (!IsPlatformOwner(context)) return Results.Forbid();
+    if (!planConfigurations.TryGetValue(code, out PlanConfiguration? current)) return Results.NotFound();
+    string displayName = request.DisplayName?.Trim() ?? "";
+    if (displayName.Length is < 2 or > 40 || request.IncludedDevices is < 0 or > 100000 || request.IncludedPanelUsers is < 0 or > 10000 ||
+        request.MonthlyPriceUsd is < 0 or > 100000 || request.AdditionalDeviceUsd is < 0 or > 10000 || request.AdditionalPanelUserUsd is < 0 or > 10000 ||
+        (current.Code == "Trial" && request.MonthlyPriceUsd != 0))
+        return Results.BadRequest(new { error = "Revisá el nombre, límites y precios del plan." });
+    var updated = new PlanConfiguration(current.Code, displayName, request.IncludedDevices, request.IncludedPanelUsers,
+        decimal.Round(request.MonthlyPriceUsd, 2), decimal.Round(request.AdditionalDeviceUsd, 2), decimal.Round(request.AdditionalPanelUserUsd, 2), request.Available || current.Code == "Trial");
+    planConfigurations[current.Code] = updated;
+    await persistence.SaveAsync("platform:plans", planConfigurations.Values.OrderBy(x => PlanSortOrder(x.Code)).ToList());
+    AuthenticatedAdmin actor = CurrentAdmin(context);
+    await persistence.AddPlatformAuditAsync(actor.UserId, actor.DisplayName, null, "PLAN_ACTUALIZADO", $"{updated.Code}: {updated.DisplayName}; USD {updated.MonthlyPriceUsd:N2}/mes; equipos {updated.IncludedDevices}; usuarios {updated.IncludedPanelUsers}.");
+    return Results.Ok(updated);
+});
 app.MapGet("/api/platform/downloads", (HttpContext context) =>
     IsPlatformAdmin(context)
         ? Results.Ok(new[] { new { name = "ARES Administración · Windows", version = "1.3.0", description = "Consola privada para clientes, licencias, soporte y facturación.", url = "https://github.com/valenge22/ARES/releases/download/admin-v1.3.0/ARES-Administracion-Setup.exe" } })
@@ -1686,15 +1715,23 @@ string NormalizeLicenseStatus(string? value) => (value ?? "").Trim().ToLowerInva
     _ => ""
 };
 
-PlanDefinition PlanDetails(string plan) => plan switch
+PlanDefinition PlanDetails(string plan)
 {
-    "Trial" => new("Prueba", 5, 1, 0m, 0m, 0m),
-    "Basic" => new("Esencial", 10, 2, 25m, 3m, 4m),
-    "Professional" => new("Profesional", 30, 10, 65m, 2.5m, 3m),
-    "Business" => new("Empresa", 100, 25, 149m, 2m, 2m),
-    "Enterprise" => new("Corporativo", 100, 25, 249m, 2m, 2m),
-    _ => new("Prueba", 5, 1, 0m, 0m, 0m)
-};
+    PlanConfiguration configured = planConfigurations.TryGetValue(plan, out PlanConfiguration? value)
+        ? value
+        : planConfigurations["Trial"];
+    return new(configured.DisplayName, configured.IncludedDevices, configured.IncludedPanelUsers,
+        configured.MonthlyPriceUsd, configured.AdditionalDeviceUsd, configured.AdditionalPanelUserUsd);
+}
+List<PlanConfiguration> DefaultPlanConfigurations() =>
+[
+    new("Trial", "Prueba", 5, 1, 0m, 0m, 0m, true),
+    new("Basic", "Esencial", 10, 2, 25m, 3m, 4m, true),
+    new("Professional", "Profesional", 30, 10, 65m, 2.5m, 3m, true),
+    new("Business", "Empresa", 100, 25, 149m, 2m, 2m, true),
+    new("Enterprise", "Corporativo", 100, 25, 249m, 2m, 2m, true)
+];
+int PlanSortOrder(string code) => code switch { "Trial" => 0, "Basic" => 1, "Professional" => 2, "Business" => 3, "Enterprise" => 4, _ => 99 };
 
 internal sealed record PlatformStaffRequest(string? Email, string? Role, bool Enabled = true);
 internal sealed record CreateSupportTicketRequest(Guid OrganizationId, string? Subject, string? Detail, string? Priority);

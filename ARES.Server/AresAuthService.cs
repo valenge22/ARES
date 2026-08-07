@@ -271,4 +271,8 @@ internal sealed record UpdateLicenseRequest(string Plan, string Status, int MaxD
     int AdditionalDevices, int AdditionalPanelUsers, DateTimeOffset? ExpiresAt, int GraceDays);
 internal sealed record PlanDefinition(string DisplayName, int IncludedDevices, int IncludedPanelUsers,
     decimal MonthlyPriceUsd, decimal AdditionalDeviceUsd, decimal AdditionalPanelUserUsd);
+internal sealed record PlanConfiguration(string Code, string DisplayName, int IncludedDevices, int IncludedPanelUsers,
+    decimal MonthlyPriceUsd, decimal AdditionalDeviceUsd, decimal AdditionalPanelUserUsd, bool Available = true);
+internal sealed record UpdatePlanConfigurationRequest(string? DisplayName, int IncludedDevices, int IncludedPanelUsers,
+    decimal MonthlyPriceUsd, decimal AdditionalDeviceUsd, decimal AdditionalPanelUserUsd, bool Available = true);
 internal sealed record EnrollDeviceRequest(string Code, string DeviceId, string MachineName);

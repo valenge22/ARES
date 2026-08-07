@@ -7,6 +7,7 @@ internal sealed class MainForm : Form
 {
     private readonly DataGridView grid = new() { Dock = DockStyle.Fill, ReadOnly = true, MultiSelect = false, SelectionMode = DataGridViewSelectionMode.FullRowSelect, AllowUserToAddRows = false, AllowUserToDeleteRows = false, AutoGenerateColumns = false, BackgroundColor = Color.White, BorderStyle = BorderStyle.None, RowHeadersVisible = false, AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill };
     private readonly Label summary = new() { Dock = DockStyle.Fill, Font = new Font("Segoe UI", 11, FontStyle.Bold), ForeColor = Color.FromArgb(30, 64, 175), TextAlign = ContentAlignment.MiddleLeft };
+    private readonly TextBox search = new() { PlaceholderText = "Buscar cliente, plan o estado…", Width = 280, Dock = DockStyle.Right, Margin = new Padding(8) };
     private List<OrganizationLicense> organizations = [];
     public MainForm()
     {
@@ -16,17 +17,20 @@ internal sealed class MainForm : Form
         var logout = HeaderButton("Cerrar sesión"); logout.Click += (_, _) => { PlatformAuth.Client.Logout(); Application.Restart(); }; header.Controls.Add(logout);
         var web = HeaderButton("Abrir respaldo web"); web.Click += (_, _) => OpenWeb(); header.Controls.Add(web);
         var alerts = HeaderButton("Alertas"); alerts.Click += (_, _) => ShowAlerts(); header.Controls.Add(alerts);
+        var auditButton = HeaderButton("Auditoría"); auditButton.Click += async (_, _) => await ShowAuditAsync(); header.Controls.Add(auditButton);
         var billing = HeaderButton("Facturación"); billing.Click += async (_, _) => await ShowBillingAsync(); header.Controls.Add(billing);
         var metricsButton = HeaderButton("Métricas"); metricsButton.Click += async (_, _) => await ShowMetricsAsync(); header.Controls.Add(metricsButton);
         var testButton = HeaderButton("Prueba integral"); testButton.Click += async (_, _) => await RunSystemTestAsync(); header.Controls.Add(testButton);
         var refresh = HeaderButton("Actualizar"); refresh.Click += async (_, _) => await LoadAsync(); header.Controls.Add(refresh);
-        var metrics = new Panel { Dock = DockStyle.Top, Height = 65, Padding = new Padding(24, 10, 24, 8), BackColor = Color.White }; metrics.Controls.Add(summary);
+        var metrics = new Panel { Dock = DockStyle.Top, Height = 65, Padding = new Padding(24, 10, 24, 8), BackColor = Color.White }; metrics.Controls.Add(search); metrics.Controls.Add(summary);
+        search.TextChanged += (_, _) => ApplySearch();
         ConfigureGrid();
         var actions = new FlowLayoutPanel { Dock = DockStyle.Bottom, Height = 64, FlowDirection = FlowDirection.RightToLeft, Padding = new Padding(12), BackColor = Color.White };
         var remove = ActionButton("Eliminar cliente", Color.FromArgb(220, 38, 38)); remove.Click += async (_, _) => await DeleteSelectedAsync();
         var edit = ActionButton("Editar licencia", Color.FromArgb(37, 99, 235)); edit.Click += async (_, _) => await EditSelectedAsync();
         var details = ActionButton("Ver detalles", Color.FromArgb(2, 132, 199)); details.Click += (_, _) => ShowDetails();
-        actions.Controls.Add(remove); actions.Controls.Add(edit); actions.Controls.Add(details);
+        var support = ActionButton("Soporte", Color.FromArgb(14, 116, 144)); support.Click += async (_, _) => await ShowSupportAsync();
+        actions.Controls.Add(remove); actions.Controls.Add(edit); actions.Controls.Add(details); actions.Controls.Add(support);
         var body = new Panel { Dock = DockStyle.Fill, Padding = new Padding(24) }; body.Controls.Add(grid); body.Controls.Add(actions);
         Controls.Add(body); Controls.Add(metrics); Controls.Add(header); Shown += async (_, _) => await LoadAsync();
     }
@@ -51,9 +55,14 @@ internal sealed class MainForm : Form
         {
             using HttpClient http = PlatformAuth.Client.CreateHttpClient();
             organizations = await http.GetFromJsonAsync<List<OrganizationLicense>>($"{PlatformAuth.ServerUrl}/api/platform/organizations") ?? [];
-            grid.DataSource = organizations; summary.Text = $"Organizaciones: {organizations.Count}     Equipos activos: {organizations.Sum(x => x.UsedDevices)}     Alertas: {organizations.Count(IsAlert)}";
+            ApplySearch(); summary.Text = $"Organizaciones: {organizations.Count}     Equipos activos: {organizations.Sum(x => x.UsedDevices)}     Alertas: {organizations.Count(IsAlert)}";
         }
         catch (Exception ex) { summary.Text = $"No se pudo actualizar: {ex.Message}"; }
+    }
+    private void ApplySearch()
+    {
+        string value = search.Text.Trim();
+        grid.DataSource = organizations.Where(x => value.Length == 0 || $"{x.OrganizationName} {x.Slug} {x.PlanName} {x.AccessStatusName}".Contains(value, StringComparison.OrdinalIgnoreCase)).ToList();
     }
     private void ShowDetails()
     {
@@ -97,6 +106,42 @@ internal sealed class MainForm : Form
         try { using HttpClient http = PlatformAuth.Client.CreateHttpClient(); using HttpResponseMessage response = await http.DeleteAsync($"{PlatformAuth.ServerUrl}/api/platform/organizations/{item.OrganizationId}"); await EnsureSuccessAsync(response); await LoadAsync(); }
         catch (Exception ex) { MessageBox.Show(ex.Message, "ARES", MessageBoxButtons.OK, MessageBoxIcon.Error); }
     }
+    private async Task ShowSupportAsync()
+    {
+        OrganizationLicense? item = Selected; if (item is null) return;
+        using var dialog = new Form { Text = $"Soporte · {item.OrganizationName}", Width = 980, Height = 620, StartPosition = FormStartPosition.CenterParent, BackColor = Color.FromArgb(241, 245, 249) };
+        var tabs = new TabControl { Dock = DockStyle.Fill };
+        var devicesTab = new TabPage("Equipos"); var eventsTab = new TabPage("Eventos recientes"); tabs.TabPages.AddRange([devicesTab, eventsTab]); dialog.Controls.Add(tabs);
+        try
+        {
+            using HttpClient http = PlatformAuth.Client.CreateHttpClient();
+            using HttpResponseMessage response = await http.GetAsync($"{PlatformAuth.ServerUrl}/api/platform/organizations/{item.OrganizationId}/support"); await EnsureSuccessAsync(response);
+            using JsonDocument data = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+            List<PlatformSupportDevice> devices = JsonSerializer.Deserialize<List<PlatformSupportDevice>>(data.RootElement.GetProperty("devices").GetRawText()) ?? [];
+            var devicesGrid = CreateReadOnlyGrid(); devicesGrid.AutoGenerateColumns = false;
+            devicesGrid.Columns.AddRange(new DataGridViewTextBoxColumn { HeaderText = "Equipo", DataPropertyName = nameof(PlatformSupportDevice.Equipo) }, new DataGridViewTextBoxColumn { HeaderText = "Usuario", DataPropertyName = nameof(PlatformSupportDevice.Usuario) }, new DataGridViewTextBoxColumn { HeaderText = "Versión", DataPropertyName = nameof(PlatformSupportDevice.Version) }, new DataGridViewTextBoxColumn { HeaderText = "Estado", DataPropertyName = nameof(PlatformSupportDevice.StateText) }, new DataGridViewTextBoxColumn { HeaderText = "Solicitud", DataPropertyName = nameof(PlatformSupportDevice.RequestText) }, new DataGridViewButtonColumn { HeaderText = "Emergencia", Text = "Revocar", UseColumnTextForButtonValue = true, Name = "Revoke" });
+            devicesGrid.DataSource = devices;
+            devicesGrid.CellContentClick += async (_, e) => { if (e.RowIndex < 0 || devicesGrid.Columns[e.ColumnIndex].Name != "Revoke" || devicesGrid.Rows[e.RowIndex].DataBoundItem is not PlatformSupportDevice device) return; if (MessageBox.Show($"¿Revocar la credencial de {device.Equipo}? El agente deberá vincularse nuevamente.", "Acción de emergencia", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes) return; try { using HttpClient revoke = PlatformAuth.Client.CreateHttpClient(); using HttpResponseMessage revokeResponse = await revoke.PostAsync($"{PlatformAuth.ServerUrl}/api/platform/organizations/{item.OrganizationId}/devices/{Uri.EscapeDataString(device.Id)}/revoke", null); await EnsureSuccessAsync(revokeResponse); MessageBox.Show("Credencial revocada.", "ARES"); dialog.Close(); } catch (Exception ex) { MessageBox.Show(ex.Message, "ARES"); } };
+            devicesTab.Controls.Add(devicesGrid);
+            var eventsGrid = CreateReadOnlyGrid(); eventsGrid.DataSource = data.RootElement.GetProperty("events").EnumerateArray().Select(x => new { Fecha = x.GetProperty("fechaUtc").GetDateTimeOffset().ToLocalTime().ToString("dd/MM/yyyy HH:mm"), Evento = x.GetProperty("tipo").GetString(), Detalle = x.GetProperty("detalle").GetString() }).ToList(); eventsTab.Controls.Add(eventsGrid);
+            dialog.ShowDialog(this);
+        }
+        catch (Exception ex) { MessageBox.Show(ex.Message, "Soporte ARES", MessageBoxButtons.OK, MessageBoxIcon.Warning); }
+    }
+    private async Task ShowAuditAsync()
+    {
+        using var dialog = new Form { Text = "Auditoría de plataforma", Width = 1050, Height = 620, StartPosition = FormStartPosition.CenterParent, BackColor = Color.FromArgb(241, 245, 249) };
+        var table = CreateReadOnlyGrid(); dialog.Controls.Add(table);
+        try
+        {
+            using HttpClient http = PlatformAuth.Client.CreateHttpClient();
+            PlatformOverview? overview = await http.GetFromJsonAsync<PlatformOverview>($"{PlatformAuth.ServerUrl}/api/platform/overview");
+            table.DataSource = overview?.Audit.Select(x => new { Fecha = x.OccurredAt.ToLocalTime().ToString("dd/MM/yyyy HH:mm"), Administrador = x.ActorName, Acción = x.Action, Detalle = x.Detail }).ToList() ?? [];
+            dialog.ShowDialog(this);
+        }
+        catch (Exception ex) { MessageBox.Show(ex.Message, "Auditoría ARES", MessageBoxButtons.OK, MessageBoxIcon.Warning); }
+    }
+    private static DataGridView CreateReadOnlyGrid() => new() { Dock = DockStyle.Fill, ReadOnly = true, AutoGenerateColumns = true, AllowUserToAddRows = false, AllowUserToDeleteRows = false, RowHeadersVisible = false, BackgroundColor = Color.White, AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill };
     private async Task ShowBillingAsync()
     {
         using var dialog = new Form { Text = "Facturación global de ARES", Width = 1180, Height = 680, StartPosition = FormStartPosition.CenterParent, BackColor = Color.FromArgb(241, 245, 249) };
@@ -229,6 +274,15 @@ internal sealed class PlatformPayment
     public string OrganizationName { get; set; } = ""; public string ProviderPaymentId { get; set; } = ""; public string Plan { get; set; } = ""; public decimal AmountArs { get; set; } public string Status { get; set; } = ""; public DateTimeOffset? PeriodStart { get; set; } public DateTimeOffset? PeriodEnd { get; set; } public string ReceiptUrl { get; set; } = ""; public DateTimeOffset OccurredAt { get; set; }
     public string DateText => OccurredAt.ToLocalTime().ToString("dd/MM/yyyy HH:mm"); public string PlanName => Plan switch { "Basic" => "Esencial", "Professional" => "Profesional", "Business" => "Empresa", "Enterprise" => "Corporativo", _ => Plan }; public string AmountText => $"ARS {AmountArs:N2}"; public string StatusName => Status switch { "approved" => "Aprobado", "pending" => "Pendiente", "in_process" => "En proceso", "rejected" => "Rechazado", _ => Status }; public string PeriodText => PeriodStart.HasValue ? $"{PeriodStart.Value.ToLocalTime():dd/MM/yyyy}{(PeriodEnd.HasValue ? $" al {PeriodEnd.Value.ToLocalTime():dd/MM/yyyy}" : "")}" : "—";
 }
+internal sealed class PlatformSupportDevice
+{
+    public string Id { get; set; } = ""; public string Equipo { get; set; } = ""; public string Usuario { get; set; } = ""; public string Version { get; set; } = "";
+    public bool Online { get; set; } public DateTimeOffset UltimaConexionUtc { get; set; } public bool BloqueadoAdministrativamente { get; set; } public bool SolicitudDesbloqueoPendiente { get; set; }
+    public string StateText => Online ? (BloqueadoAdministrativamente ? "En línea · bloqueado" : "En línea") : "Sin conexión";
+    public string RequestText => SolicitudDesbloqueoPendiente ? "Pendiente" : "—";
+}
+internal sealed class PlatformOverview { public List<PlatformAuditItem> Audit { get; set; } = []; }
+internal sealed class PlatformAuditItem { public string ActorName { get; set; } = ""; public string Action { get; set; } = ""; public string Detail { get; set; } = ""; public DateTimeOffset OccurredAt { get; set; } }
 internal sealed class MetricRow { public string Label { get; set; } = ""; public decimal Value { get; set; } public string ValueText => Value.ToString("N2"); }
 internal sealed class ExpirationRow { public string Organization { get; set; } = ""; public string Plan { get; set; } = ""; public string Date { get; set; } = ""; public int Days { get; set; } }
 internal sealed record SystemCheck(string Name, bool Success, string Detail);

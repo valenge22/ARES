@@ -496,9 +496,20 @@ app.MapGet("/api/platform/organizations/{id:guid}/support", async (Guid id, Http
 {
     if (!IsPlatformAdmin(context)) return Results.Forbid();
     DateTimeOffset cutoff = DateTimeOffset.UtcNow.AddSeconds(-35);
-    var devices = agents.Values.Where(a => a.OrganizationId == id).Select(a => new { a.Equipo, a.Usuario, a.Version, Online = a.UltimaConexionUtc >= cutoff, a.UltimaConexionUtc, a.BloqueadoAdministrativamente, a.SolicitudDesbloqueoPendiente }).OrderBy(x => x.Equipo).ToList();
+    var devices = agents.Values.Where(a => a.OrganizationId == id).Select(a => new { a.Id, a.Equipo, a.Usuario, a.Version, Online = a.UltimaConexionUtc >= cutoff, a.UltimaConexionUtc, a.BloqueadoAdministrativamente, a.SolicitudDesbloqueoPendiente }).OrderBy(x => x.Equipo).ToList();
     var events = audit.Where(x => x.OrganizationId == id).OrderByDescending(x => x.FechaUtc).Take(30).ToList();
     return Results.Ok(new { devices, events });
+});
+app.MapPost("/api/platform/organizations/{organizationId:guid}/devices/{deviceId}/revoke", async (Guid organizationId, string deviceId, HttpContext context) =>
+{
+    if (!IsPlatformAdmin(context)) return Results.Forbid();
+    bool revoked = await persistence.RevokeDeviceAsync(organizationId, deviceId);
+    if (!revoked) return Results.NotFound(new { error = "No se encontró la credencial del equipo." });
+    AgentStatus? live = agents.Values.FirstOrDefault(a => a.OrganizationId == organizationId && a.Id.Equals(deviceId, StringComparison.OrdinalIgnoreCase));
+    if (live is not null) { live.EstaEnLinea = false; live.BloqueadoAdministrativamente = true; }
+    AuthenticatedAdmin actor = CurrentAdmin(context);
+    await persistence.AddPlatformAuditAsync(actor.UserId, actor.DisplayName, organizationId, "EQUIPO_REVOCADO", $"Se revocó la credencial del equipo {deviceId}.");
+    return Results.Ok(new { revoked = true });
 });
 app.MapGet("/api/platform/billing/history", async (HttpContext context) =>
     IsPlatformAdmin(context) ? Results.Ok(await persistence.GetAllBillingPaymentsAsync()) : Results.Forbid());

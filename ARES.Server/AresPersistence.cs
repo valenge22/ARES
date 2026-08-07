@@ -73,7 +73,8 @@ internal sealed class AresPersistence
             alter table ares_organizations add column if not exists onboarding_completed boolean not null default false;
             alter table ares_organizations add column if not exists license_plan varchar(30) not null default 'Trial';
             alter table ares_organizations add column if not exists license_status varchar(20) not null default 'Active';
-            alter table ares_organizations add column if not exists trial_ends_at timestamptz not null default (now() + interval '14 days');
+            alter table ares_organizations add column if not exists trial_ends_at timestamptz not null default (now() + interval '7 days');
+            alter table ares_organizations alter column trial_ends_at set default (now() + interval '7 days');
             alter table ares_organizations add column if not exists license_expires_at timestamptz;
             alter table ares_organizations add column if not exists license_grace_days integer not null default 3;
             alter table ares_organizations add column if not exists max_devices integer not null default 5;

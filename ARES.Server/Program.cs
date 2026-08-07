@@ -245,9 +245,10 @@ app.MapGet("/portal", (HttpContext context) =>
 {
     context.Response.Headers.CacheControl = "no-store, no-cache, must-revalidate";
     string html = File.ReadAllText(Path.Combine(app.Environment.ContentRootPath, "wwwroot", "portal.html"));
-    html = html.Replace("onsubmit=\"login(event)\"", "onsubmit=\"submitLogin(event)\"")
+    html = html.Replace("onsubmit=\"login(event)\"", "onsubmit=\"return false\"")
         .Replace("async function login(e)", "async function submitLogin(e)")
-        .Replace("email:email.value,password:password.value", "email:document.getElementById('email').value.trim(),password:document.getElementById('password').value");
+        .Replace("email:email.value,password:password.value", "email:document.getElementById('email').value.trim(),password:document.getElementById('password').value")
+        .Replace("</script></body>", "document.querySelector('#login form').onsubmit=submitLogin;</script></body>");
     return Results.Content(html, "text/html; charset=utf-8");
 });
 app.MapGet("/api/downloads", () => Results.Ok(new

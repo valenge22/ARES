@@ -18,6 +18,8 @@ internal sealed class MainForm : Form
         var web = HeaderButton("Abrir respaldo web"); web.Click += (_, _) => OpenWeb(); header.Controls.Add(web);
         var alerts = HeaderButton("Alertas"); alerts.Click += (_, _) => ShowAlerts(); header.Controls.Add(alerts);
         var auditButton = HeaderButton("Auditoría"); auditButton.Click += async (_, _) => await ShowAuditAsync(); header.Controls.Add(auditButton);
+        var ticketsButton = HeaderButton("Tickets"); ticketsButton.Click += async (_, _) => await ShowTicketsAsync(); header.Controls.Add(ticketsButton);
+        var staffButton = HeaderButton("Equipo interno"); staffButton.Click += async (_, _) => await ShowStaffAsync(); header.Controls.Add(staffButton);
         var billing = HeaderButton("Facturación"); billing.Click += async (_, _) => await ShowBillingAsync(); header.Controls.Add(billing);
         var metricsButton = HeaderButton("Métricas"); metricsButton.Click += async (_, _) => await ShowMetricsAsync(); header.Controls.Add(metricsButton);
         var testButton = HeaderButton("Prueba integral"); testButton.Click += async (_, _) => await RunSystemTestAsync(); header.Controls.Add(testButton);
@@ -141,6 +143,20 @@ internal sealed class MainForm : Form
         }
         catch (Exception ex) { MessageBox.Show(ex.Message, "Auditoría ARES", MessageBoxButtons.OK, MessageBoxIcon.Warning); }
     }
+    private async Task ShowTicketsAsync()
+    {
+        using var dialog = new Form { Text = "Soporte interno · Tickets", Width = 1100, Height = 650, StartPosition = FormStartPosition.CenterParent }; var gridTickets = CreateReadOnlyGrid(); var create = ActionButton("Nuevo ticket", Color.FromArgb(37, 99, 235)); var toolbar = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 58, Padding = new Padding(12), FlowDirection = FlowDirection.RightToLeft }; toolbar.Controls.Add(create); dialog.Controls.Add(gridTickets); dialog.Controls.Add(toolbar);
+        async Task LoadTickets() { using HttpClient http = PlatformAuth.Client.CreateHttpClient(); List<PlatformTicket> tickets = await http.GetFromJsonAsync<List<PlatformTicket>>($"{PlatformAuth.ServerUrl}/api/platform/tickets") ?? []; gridTickets.DataSource = tickets.Select(x => new { x.TicketId, Cliente = x.OrganizationName, x.Subject, Estado = x.Status, Prioridad = x.Priority, Actualizado = x.UpdatedAt.ToLocalTime().ToString("dd/MM/yyyy HH:mm") }).ToList(); }
+        create.Click += async (_, _) => { if (organizations.Count == 0) return; using var form = new Form { Text = "Nuevo ticket", Width = 430, Height = 390, StartPosition = FormStartPosition.CenterParent }; var client = new ComboBox { Width = 340, DropDownStyle = ComboBoxStyle.DropDownList, DataSource = organizations, DisplayMember = nameof(OrganizationLicense.OrganizationName), ValueMember = nameof(OrganizationLicense.OrganizationId) }; var subject = new TextBox { Width = 340 }; var detail = new TextBox { Width = 340, Height = 100, Multiline = true }; var priority = Choice(["Low", "Normal", "High"], "Normal"); priority.Width = 340; var save = ActionButton("Crear", Color.FromArgb(37,99,235)); var flow = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.TopDown, Padding = new Padding(28), WrapContents = false }; foreach(var c in new Control[]{FieldLabel("Cliente"),client,FieldLabel("Asunto"),subject,FieldLabel("Detalle"),detail,FieldLabel("Prioridad"),priority,save})flow.Controls.Add(c); form.Controls.Add(flow); save.Click += async (_, _) => { try { using HttpClient http = PlatformAuth.Client.CreateHttpClient(); using var response = await http.PostAsJsonAsync($"{PlatformAuth.ServerUrl}/api/platform/tickets", new { organizationId=(Guid)client.SelectedValue, subject=subject.Text, detail=detail.Text, priority=priority.Text }); await EnsureSuccessAsync(response); form.DialogResult=DialogResult.OK; } catch(Exception ex){MessageBox.Show(ex.Message,"ARES");} }; if(form.ShowDialog(this)==DialogResult.OK)await LoadTickets(); };
+        await LoadTickets(); dialog.ShowDialog(this);
+    }
+    private async Task ShowStaffAsync()
+    {
+        using var dialog = new Form { Text = "Equipo interno ARES", Width = 860, Height = 550, StartPosition = FormStartPosition.CenterParent }; var table = CreateReadOnlyGrid(); var add = ActionButton("Agregar o actualizar", Color.FromArgb(79,70,229)); var toolbar = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 58, Padding = new Padding(12), FlowDirection = FlowDirection.RightToLeft }; toolbar.Controls.Add(add); dialog.Controls.Add(table); dialog.Controls.Add(toolbar);
+        async Task LoadStaff() { using HttpClient http = PlatformAuth.Client.CreateHttpClient(); table.DataSource = await http.GetFromJsonAsync<List<PlatformStaff>>($"{PlatformAuth.ServerUrl}/api/platform/staff") ?? []; }
+        add.Click += async (_, _) => { string email = Microsoft.VisualBasic.Interaction.InputBox("Correo de una cuenta que ya inició sesión en ARES:", "Equipo interno"); if(string.IsNullOrWhiteSpace(email))return; string role=Microsoft.VisualBasic.Interaction.InputBox("Rol: Owner, Support o Sales", "Equipo interno", "Support"); if(string.IsNullOrWhiteSpace(role))return; try { using HttpClient http = PlatformAuth.Client.CreateHttpClient(); using var response=await http.PutAsJsonAsync($"{PlatformAuth.ServerUrl}/api/platform/staff",new {email,role,enabled=true});await EnsureSuccessAsync(response);await LoadStaff();}catch(Exception ex){MessageBox.Show(ex.Message,"ARES");} };
+        await LoadStaff(); dialog.ShowDialog(this);
+    }
     private static DataGridView CreateReadOnlyGrid() => new() { Dock = DockStyle.Fill, ReadOnly = true, AutoGenerateColumns = true, AllowUserToAddRows = false, AllowUserToDeleteRows = false, RowHeadersVisible = false, BackgroundColor = Color.White, AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill };
     private async Task ShowBillingAsync()
     {
@@ -255,6 +271,7 @@ internal sealed class MainForm : Form
         if (x.TotalPanelUsers > 0 && x.UsedPanelUsers >= x.TotalPanelUsers) yield return $"{x.OrganizationName}: alcanzó el límite de usuarios ({x.UsedPanelUsers}/{x.TotalPanelUsers}).";
     }
     private static ComboBox Choice(string[] values, string selected) { var result = new ComboBox { Width = 360, DropDownStyle = ComboBoxStyle.DropDownList }; result.Items.AddRange(values); result.SelectedItem = values.Contains(selected) ? selected : values[0]; return result; }
+    private static Label FieldLabel(string text) => new() { Text = text, Width = 340, Height = 20, Margin = new Padding(0, 6, 0, 0) };
     private static NumericUpDown Number(int value, int min, int max) => new() { Width = 360, Minimum = min, Maximum = max, Value = Math.Clamp(value, min, max) };
     private static void AddField(FlowLayoutPanel panel, string label, Control control) { panel.Controls.Add(new Label { Text = label, Width = 360, Height = 20, Margin = new Padding(0, 6, 0, 0) }); panel.Controls.Add(control); }
     private static async Task EnsureSuccessAsync(HttpResponseMessage response) { if (response.IsSuccessStatusCode) return; string text = await response.Content.ReadAsStringAsync(); try { string? error = JsonDocument.Parse(text).RootElement.GetProperty("error").GetString(); throw new InvalidOperationException(error ?? $"Error {response.StatusCode}"); } catch (JsonException) { throw new InvalidOperationException($"Error {response.StatusCode}"); } }
@@ -283,6 +300,8 @@ internal sealed class PlatformSupportDevice
 }
 internal sealed class PlatformOverview { public List<PlatformAuditItem> Audit { get; set; } = []; }
 internal sealed class PlatformAuditItem { public string ActorName { get; set; } = ""; public string Action { get; set; } = ""; public string Detail { get; set; } = ""; public DateTimeOffset OccurredAt { get; set; } }
+internal sealed class PlatformTicket { public Guid TicketId { get; set; } public string OrganizationName { get; set; } = ""; public string Subject { get; set; } = ""; public string Status { get; set; } = ""; public string Priority { get; set; } = ""; public DateTimeOffset UpdatedAt { get; set; } }
+internal sealed class PlatformStaff { public string Email { get; set; } = ""; public string DisplayName { get; set; } = ""; public string Role { get; set; } = ""; public bool Enabled { get; set; } }
 internal sealed class MetricRow { public string Label { get; set; } = ""; public decimal Value { get; set; } public string ValueText => Value.ToString("N2"); }
 internal sealed class ExpirationRow { public string Organization { get; set; } = ""; public string Plan { get; set; } = ""; public string Date { get; set; } = ""; public int Days { get; set; } }
 internal sealed record SystemCheck(string Name, bool Success, string Detail);

@@ -247,6 +247,28 @@ internal sealed class AresPersistence
                 detail text not null,
                 occurred_at timestamptz not null default now()
             );
+            create table if not exists ares_platform_staff (
+                user_id uuid primary key,
+                email varchar(320) not null,
+                display_name varchar(80) not null,
+                role varchar(20) not null,
+                enabled boolean not null default true,
+                created_at timestamptz not null default now(),
+                updated_at timestamptz not null default now(),
+                constraint ck_ares_platform_staff_role check (role in ('Owner','Support','Sales'))
+            );
+            create table if not exists ares_support_tickets (
+                ticket_id uuid primary key,
+                organization_id uuid not null,
+                subject varchar(160) not null,
+                detail text not null,
+                status varchar(20) not null default 'Open',
+                priority varchar(20) not null default 'Normal',
+                created_by uuid not null,
+                created_at timestamptz not null default now(),
+                updated_at timestamptz not null default now(),
+                constraint ck_ares_support_tickets_status check (status in ('Open','InProgress','Resolved','Closed'))
+            );
 
             alter table ares_state enable row level security;
             alter table ares_admin_users enable row level security;
@@ -261,6 +283,8 @@ internal sealed class AresPersistence
             alter table ares_billing_subscriptions enable row level security;
             alter table ares_billing_payments enable row level security;
             alter table ares_platform_audit_events enable row level security;
+            alter table ares_platform_staff enable row level security;
+            alter table ares_support_tickets enable row level security;
 
             revoke all on table ares_state from anon, authenticated;
             revoke all on table ares_admin_users from anon, authenticated;
@@ -275,6 +299,8 @@ internal sealed class AresPersistence
             revoke all on table ares_billing_subscriptions from anon, authenticated;
             revoke all on table ares_billing_payments from anon, authenticated;
             revoke all on table ares_platform_audit_events from anon, authenticated;
+            revoke all on table ares_platform_staff from anon, authenticated;
+            revoke all on table ares_support_tickets from anon, authenticated;
             """;
         await command.ExecuteNonQueryAsync();
     }
@@ -299,6 +325,50 @@ internal sealed class AresPersistence
         await using var reader = await command.ExecuteReaderAsync();
         while (await reader.ReadAsync()) result.Add(new(reader.GetGuid(0), reader.GetString(1), reader.IsDBNull(2) ? null : reader.GetGuid(2), reader.GetString(3), reader.GetString(4), reader.GetFieldValue<DateTimeOffset>(5)));
         return result;
+    }
+
+    public async Task<List<PlatformStaffMember>> GetPlatformStaffAsync()
+    {
+        var result = new List<PlatformStaffMember>(); if (!UsesDatabase) return result;
+        await using var connection = new NpgsqlConnection(connectionString); await connection.OpenAsync(); await using var command = connection.CreateCommand();
+        command.CommandText = "select user_id,email,display_name,role,enabled from ares_platform_staff order by created_at"; await using var reader = await command.ExecuteReaderAsync();
+        while (await reader.ReadAsync()) result.Add(new(reader.GetGuid(0), reader.GetString(1), reader.GetString(2), reader.GetString(3), reader.GetBoolean(4))); return result;
+    }
+    public async Task<bool> SetPlatformStaffByEmailAsync(string email, string role, bool enabled)
+    {
+        if (!UsesDatabase) return false;
+        await using var connection = new NpgsqlConnection(connectionString); await connection.OpenAsync(); await using var command = connection.CreateCommand();
+        command.CommandText = """
+            insert into ares_platform_staff(user_id,email,display_name,role,enabled,updated_at)
+            select user_id,email,display_name,@role,@enabled,now() from ares_admin_users where lower(email)=lower(@email)
+            on conflict(user_id) do update set role=excluded.role,enabled=excluded.enabled,email=excluded.email,display_name=excluded.display_name,updated_at=now()
+            """;
+        command.Parameters.AddWithValue("email", email); command.Parameters.AddWithValue("role", role); command.Parameters.AddWithValue("enabled", enabled);
+        return await command.ExecuteNonQueryAsync() > 0;
+    }
+    public async Task EnsurePlatformOwnerAsync(string? userId, string? email, string? displayName)
+    {
+        if (!UsesDatabase || !Guid.TryParse(userId, out Guid id)) return;
+        await using var connection = new NpgsqlConnection(connectionString); await connection.OpenAsync(); await using var command = connection.CreateCommand();
+        command.CommandText = "insert into ares_platform_staff(user_id,email,display_name,role,enabled) values(@id,@email,@name,'Owner',true) on conflict(user_id) do update set role='Owner',enabled=true,updated_at=now()";
+        command.Parameters.AddWithValue("id", id); command.Parameters.AddWithValue("email", email ?? ""); command.Parameters.AddWithValue("name", displayName ?? "ADMINISTRADOR"); await command.ExecuteNonQueryAsync();
+    }
+    public async Task<List<SupportTicket>> GetSupportTicketsAsync(Guid? organizationId = null)
+    {
+        var result = new List<SupportTicket>(); if (!UsesDatabase) return result;
+        await using var connection = new NpgsqlConnection(connectionString); await connection.OpenAsync(); await using var command = connection.CreateCommand();
+        command.CommandText = "select t.ticket_id,t.organization_id,o.name,t.subject,t.detail,t.status,t.priority,t.created_at,t.updated_at from ares_support_tickets t join ares_organizations o on o.organization_id=t.organization_id where (@org is null or t.organization_id=@org) order by t.updated_at desc limit 500"; command.Parameters.AddWithValue("org", (object?)organizationId ?? DBNull.Value); await using var reader = await command.ExecuteReaderAsync();
+        while (await reader.ReadAsync()) result.Add(new(reader.GetGuid(0),reader.GetGuid(1),reader.GetString(2),reader.GetString(3),reader.GetString(4),reader.GetString(5),reader.GetString(6),reader.GetFieldValue<DateTimeOffset>(7),reader.GetFieldValue<DateTimeOffset>(8))); return result;
+    }
+    public async Task CreateSupportTicketAsync(Guid organizationId, string subject, string detail, string priority, Guid actor)
+    {
+        if (!UsesDatabase) throw new InvalidOperationException("Los tickets requieren PostgreSQL.");
+        await using var connection = new NpgsqlConnection(connectionString); await connection.OpenAsync(); await using var command = connection.CreateCommand(); command.CommandText = "insert into ares_support_tickets(ticket_id,organization_id,subject,detail,priority,created_by) values(@id,@org,@subject,@detail,@priority,@actor)";
+        command.Parameters.AddWithValue("id",Guid.NewGuid());command.Parameters.AddWithValue("org",organizationId);command.Parameters.AddWithValue("subject",subject);command.Parameters.AddWithValue("detail",detail);command.Parameters.AddWithValue("priority",priority);command.Parameters.AddWithValue("actor",actor); await command.ExecuteNonQueryAsync();
+    }
+    public async Task<bool> UpdateSupportTicketAsync(Guid ticketId, string status)
+    {
+        if (!UsesDatabase) return false; await using var connection = new NpgsqlConnection(connectionString); await connection.OpenAsync(); await using var command = connection.CreateCommand(); command.CommandText="update ares_support_tickets set status=@status,updated_at=now() where ticket_id=@id"; command.Parameters.AddWithValue("id",ticketId);command.Parameters.AddWithValue("status",status);return await command.ExecuteNonQueryAsync()>0;
     }
 
     public async Task ReplaceMfaRecoveryCodesAsync(Guid userId, IReadOnlyCollection<byte[]> hashes)
@@ -1087,6 +1157,8 @@ internal sealed record PlatformBillingPayment(Guid PaymentId, Guid OrganizationI
     string Plan, decimal AmountArs, string Status, DateTimeOffset? PeriodStart, DateTimeOffset? PeriodEnd,
     string ReceiptUrl, DateTimeOffset OccurredAt);
 internal sealed record PlatformAuditEvent(Guid EventId, string ActorName, Guid? OrganizationId, string Action, string Detail, DateTimeOffset OccurredAt);
+internal sealed record PlatformStaffMember(Guid UserId, string Email, string DisplayName, string Role, bool Enabled);
+internal sealed record SupportTicket(Guid TicketId, Guid OrganizationId, string OrganizationName, string Subject, string Detail, string Status, string Priority, DateTimeOffset CreatedAt, DateTimeOffset UpdatedAt);
 internal sealed record LoginEventInfo(string ClientName, string IpAddress, bool Successful, DateTimeOffset OccurredAt);
 internal sealed record RegistrationRequestInfo(Guid UserId, string Email, string DisplayName, string Status, DateTimeOffset RequestedAt, DateTimeOffset? ReviewedAt);
 internal sealed record InvitationInfo(Guid InvitationId, string CodePrefix, int MaxUses, int UsedCount, DateTimeOffset ExpiresAt, bool Revoked, DateTimeOffset CreatedAt);

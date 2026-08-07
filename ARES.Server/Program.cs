@@ -18,6 +18,10 @@ await persistence.InitializeAsync();
 await persistence.EnsureOwnerAsync(
     builder.Configuration["ARES_OWNER_USER_ID"] ?? Environment.GetEnvironmentVariable("ARES_OWNER_USER_ID"),
     builder.Configuration["ARES_OWNER_NAME"] ?? Environment.GetEnvironmentVariable("ARES_OWNER_NAME"));
+await persistence.EnsurePlatformOwnerAsync(
+    builder.Configuration["ARES_PLATFORM_ADMIN_USER_ID"] ?? Environment.GetEnvironmentVariable("ARES_PLATFORM_ADMIN_USER_ID") ?? builder.Configuration["ARES_OWNER_USER_ID"] ?? Environment.GetEnvironmentVariable("ARES_OWNER_USER_ID"),
+    builder.Configuration["ARES_OWNER_EMAIL"] ?? Environment.GetEnvironmentVariable("ARES_OWNER_EMAIL"),
+    builder.Configuration["ARES_OWNER_NAME"] ?? Environment.GetEnvironmentVariable("ARES_OWNER_NAME"));
 var authService = new AresAuthService(builder.Configuration, persistence);
 var mercadoPago = new MercadoPagoService(builder.Configuration);
 string platformAdminUserId = builder.Configuration["ARES_PLATFORM_ADMIN_USER_ID"]
@@ -25,6 +29,7 @@ string platformAdminUserId = builder.Configuration["ARES_PLATFORM_ADMIN_USER_ID"
     ?? builder.Configuration["ARES_OWNER_USER_ID"]
     ?? Environment.GetEnvironmentVariable("ARES_OWNER_USER_ID")
     ?? "";
+var platformStaff = new ConcurrentDictionary<Guid, PlatformStaffMember>((await persistence.GetPlatformStaffAsync()).ToDictionary(x => x.UserId));
 
 string apiKey = builder.Configuration["ARES_API_KEY"]
     ?? Environment.GetEnvironmentVariable("ARES_API_KEY")
@@ -492,9 +497,36 @@ app.MapGet("/api/platform/overview", async (HttpContext context) =>
     }
     return Results.Ok(new { alerts, audit = await persistence.GetPlatformAuditAsync() });
 });
+app.MapGet("/api/platform/staff", (HttpContext context) =>
+    IsPlatformOwner(context) ? Results.Ok(platformStaff.Values.OrderBy(x => x.DisplayName)) : Results.Forbid());
+app.MapPut("/api/platform/staff", async (PlatformStaffRequest request, HttpContext context) =>
+{
+    if (!IsPlatformOwner(context)) return Results.Forbid();
+    string email = request.Email?.Trim() ?? "", role = request.Role?.Trim() ?? "";
+    if (!email.Contains('@') || role is not ("Owner" or "Support" or "Sales")) return Results.BadRequest(new { error = "Correo o rol inválido." });
+    if (!await persistence.SetPlatformStaffByEmailAsync(email, role, request.Enabled)) return Results.BadRequest(new { error = "La cuenta debe iniciar sesión en ARES antes de poder agregarla." });
+    platformStaff.Clear(); foreach (PlatformStaffMember staff in await persistence.GetPlatformStaffAsync()) platformStaff[staff.UserId] = staff;
+    AuthenticatedAdmin actor = CurrentAdmin(context); await persistence.AddPlatformAuditAsync(actor.UserId, actor.DisplayName, null, "EQUIPO_INTERNO_ACTUALIZADO", $"{email}: {role}, {(request.Enabled ? "habilitado" : "deshabilitado")}.");
+    return Results.Ok(new { updated = true });
+});
+app.MapGet("/api/platform/tickets", async (HttpContext context) =>
+    IsPlatformAdmin(context) ? Results.Ok(await persistence.GetSupportTicketsAsync()) : Results.Forbid());
+app.MapPost("/api/platform/tickets", async (CreateSupportTicketRequest request, HttpContext context) =>
+{
+    if (!HasPlatformRole(context, "Owner", "Support")) return Results.Forbid();
+    string subject = request.Subject?.Trim() ?? "", detail = request.Detail?.Trim() ?? "", priority = request.Priority?.Trim() ?? "Normal";
+    if (subject.Length is < 3 or > 160 || detail.Length is < 3 or > 5000 || priority is not ("Low" or "Normal" or "High")) return Results.BadRequest(new { error = "Revisá los datos del ticket." });
+    AuthenticatedAdmin actor = CurrentAdmin(context); await persistence.CreateSupportTicketAsync(request.OrganizationId, subject, detail, priority, actor.UserId); await persistence.AddPlatformAuditAsync(actor.UserId, actor.DisplayName, request.OrganizationId, "TICKET_CREADO", subject);
+    return Results.Ok(new { created = true });
+});
+app.MapPut("/api/platform/tickets/{id:guid}", async (Guid id, UpdateSupportTicketRequest request, HttpContext context) =>
+{
+    if (!IsPlatformAdmin(context) || request.Status is not ("Open" or "InProgress" or "Resolved" or "Closed")) return Results.Forbid();
+    return await persistence.UpdateSupportTicketAsync(id, request.Status) ? Results.Ok(new { updated = true }) : Results.NotFound();
+});
 app.MapGet("/api/platform/organizations/{id:guid}/support", async (Guid id, HttpContext context) =>
 {
-    if (!IsPlatformAdmin(context)) return Results.Forbid();
+    if (!HasPlatformRole(context, "Owner", "Support")) return Results.Forbid();
     DateTimeOffset cutoff = DateTimeOffset.UtcNow.AddSeconds(-35);
     var devices = agents.Values.Where(a => a.OrganizationId == id).Select(a => new { a.Id, a.Equipo, a.Usuario, a.Version, Online = a.UltimaConexionUtc >= cutoff, a.UltimaConexionUtc, a.BloqueadoAdministrativamente, a.SolicitudDesbloqueoPendiente }).OrderBy(x => x.Equipo).ToList();
     var events = audit.Where(x => x.OrganizationId == id).OrderByDescending(x => x.FechaUtc).Take(30).ToList();
@@ -502,7 +534,7 @@ app.MapGet("/api/platform/organizations/{id:guid}/support", async (Guid id, Http
 });
 app.MapPost("/api/platform/organizations/{organizationId:guid}/devices/{deviceId}/revoke", async (Guid organizationId, string deviceId, HttpContext context) =>
 {
-    if (!IsPlatformAdmin(context)) return Results.Forbid();
+    if (!HasPlatformRole(context, "Owner", "Support")) return Results.Forbid();
     bool revoked = await persistence.RevokeDeviceAsync(organizationId, deviceId);
     if (!revoked) return Results.NotFound(new { error = "No se encontró la credencial del equipo." });
     AgentStatus? live = agents.Values.FirstOrDefault(a => a.OrganizationId == organizationId && a.Id.Equals(deviceId, StringComparison.OrdinalIgnoreCase));
@@ -515,7 +547,7 @@ app.MapGet("/api/platform/billing/history", async (HttpContext context) =>
     IsPlatformAdmin(context) ? Results.Ok(await persistence.GetAllBillingPaymentsAsync()) : Results.Forbid());
 app.MapPut("/api/platform/organizations/{id:guid}/license", async (Guid id, UpdateLicenseRequest request, HttpContext context) =>
 {
-    if (!IsPlatformAdmin(context)) return Results.Forbid();
+    if (!HasPlatformRole(context, "Owner", "Sales")) return Results.Forbid();
     string plan = NormalizePlan(request.Plan); string status = NormalizeLicenseStatus(request.Status);
     if (string.IsNullOrEmpty(plan) || string.IsNullOrEmpty(status) || request.AdditionalDevices is < 0 or > 100000 ||
         request.AdditionalPanelUsers is < 0 or > 10000 || request.GraceDays is < 0 or > 30)
@@ -533,7 +565,7 @@ app.MapPut("/api/platform/organizations/{id:guid}/license", async (Guid id, Upda
 });
 app.MapDelete("/api/platform/organizations/{id:guid}", async (Guid id, HttpContext context) =>
 {
-    if (!IsPlatformAdmin(context)) return Results.Forbid();
+    if (!IsPlatformOwner(context)) return Results.Forbid();
     if (id == AresPersistence.DefaultOrganizationId || id == CurrentOrganization(context))
         return Results.BadRequest(new { error = "No se puede eliminar la organización principal o la organización de tu sesión." });
     await persistence.ArchiveOrganizationAsync(id);
@@ -1459,7 +1491,14 @@ List<GroupPolicy> GetPolicies(Guid organizationId)
 bool IsOwner(HttpContext context) => context.Items["AresAdmin"] is AuthenticatedAdmin admin && admin.Role == "Owner";
 bool IsAdministrator(HttpContext context) => context.Items["AresAdmin"] is AuthenticatedAdmin admin && admin.Role is "Owner" or "Administrator";
 bool IsPlatformAdmin(HttpContext context) => context.Items["AresAdmin"] is AuthenticatedAdmin admin &&
-    admin.MfaVerified && !string.IsNullOrWhiteSpace(platformAdminUserId) && admin.UserId.ToString().Equals(platformAdminUserId, StringComparison.OrdinalIgnoreCase);
+    admin.MfaVerified && (platformStaff.TryGetValue(admin.UserId, out PlatformStaffMember? staff) && staff.Enabled ||
+        !string.IsNullOrWhiteSpace(platformAdminUserId) && admin.UserId.ToString().Equals(platformAdminUserId, StringComparison.OrdinalIgnoreCase));
+bool IsPlatformOwner(HttpContext context) => context.Items["AresAdmin"] is AuthenticatedAdmin admin && admin.MfaVerified &&
+    (platformStaff.TryGetValue(admin.UserId, out PlatformStaffMember? staff) && staff.Enabled && staff.Role == "Owner" ||
+        !string.IsNullOrWhiteSpace(platformAdminUserId) && admin.UserId.ToString().Equals(platformAdminUserId, StringComparison.OrdinalIgnoreCase));
+bool HasPlatformRole(HttpContext context, params string[] roles) => context.Items["AresAdmin"] is AuthenticatedAdmin admin && admin.MfaVerified &&
+    ((platformStaff.TryGetValue(admin.UserId, out PlatformStaffMember? staff) && staff.Enabled && roles.Contains(staff.Role)) ||
+     (!string.IsNullOrWhiteSpace(platformAdminUserId) && admin.UserId.ToString().Equals(platformAdminUserId, StringComparison.OrdinalIgnoreCase) && roles.Contains("Owner")));
 bool IsWebAuthClient(HttpContext context) => context.Request.Headers["X-ARES-Web"].FirstOrDefault() == "1";
 IResult WebAuthResult(HttpContext context, AuthResult result)
 {
@@ -1619,6 +1658,7 @@ string NormalizeLicenseStatus(string? value) => (value ?? "").Trim().ToLowerInva
     "pastdue" or "pago pendiente" => "PastDue",
     _ => ""
 };
+
 PlanDefinition PlanDetails(string plan) => plan switch
 {
     "Trial" => new("Prueba", 5, 1, 0m, 0m, 0m),
@@ -1628,3 +1668,7 @@ PlanDefinition PlanDetails(string plan) => plan switch
     "Enterprise" => new("Corporativo", 100, 25, 249m, 2m, 2m),
     _ => new("Prueba", 5, 1, 0m, 0m, 0m)
 };
+
+internal sealed record PlatformStaffRequest(string? Email, string? Role, bool Enabled = true);
+internal sealed record CreateSupportTicketRequest(Guid OrganizationId, string? Subject, string? Detail, string? Priority);
+internal sealed record UpdateSupportTicketRequest(string Status);

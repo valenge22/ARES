@@ -156,6 +156,7 @@ app.Use(async (context, next) =>
         context.Request.Path.Equals("/admin-mfa.js") ||
         context.Request.Path.Equals("/admin-license.js") ||
         context.Request.Path.Equals("/admin-operations.js") ||
+        context.Request.Path.Equals("/admin-downloads.js") ||
         context.Request.Path.Equals("/portal-billing.js") ||
         context.Request.Path.Equals("/api/downloads") ||
         context.Request.Path.StartsWithSegments("/health") ||
@@ -272,6 +273,11 @@ app.MapGet("/admin-operations.js", (HttpContext context) =>
 {
     context.Response.Headers.CacheControl = "no-store";
     return Results.File(Path.Combine(app.Environment.ContentRootPath, "wwwroot", "admin-operations.js"), "application/javascript; charset=utf-8");
+});
+app.MapGet("/admin-downloads.js", (HttpContext context) =>
+{
+    context.Response.Headers.CacheControl = "no-store";
+    return Results.File(Path.Combine(app.Environment.ContentRootPath, "wwwroot", "admin-downloads.js"), "application/javascript; charset=utf-8");
 });
 app.MapGet("/portal-billing.js", (HttpContext context) =>
 {
@@ -490,6 +496,10 @@ app.MapPost("/api/billing/mercadopago/webhook", async (HttpContext context, Json
 });
 app.MapGet("/api/platform/organizations", async (HttpContext context) =>
     IsPlatformAdmin(context) ? Results.Ok(await persistence.GetLicensesAsync()) : Results.Forbid());
+app.MapGet("/api/platform/downloads", (HttpContext context) =>
+    IsPlatformAdmin(context)
+        ? Results.Ok(new[] { new { name = "ARES Administración · Windows", version = "1.3.0", description = "Consola privada para clientes, licencias, soporte y facturación.", url = "https://github.com/valenge22/ARES/releases/download/admin-v1.3.0/ARES-Administracion-Setup.exe" } })
+        : Results.Forbid());
 app.MapGet("/api/platform/overview", async (HttpContext context) =>
 {
     if (!IsPlatformAdmin(context)) return Results.Forbid();

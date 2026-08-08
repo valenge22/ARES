@@ -166,7 +166,7 @@ app.Use(async (context, next) =>
         context.Request.Path.Equals("/admin-operations.js") ||
         context.Request.Path.Equals("/admin-downloads.js") ||
         context.Request.Path.Equals("/portal-billing.js") ||
-        context.Request.Path.Equals("/media/ares-presentacion.mp4") ||
+        context.Request.Path.Equals("/media/ares-presentacion-v2.mp4") ||
         context.Request.Path.Equals("/api/downloads") ||
         context.Request.Path.StartsWithSegments("/health") ||
         context.Request.Path.StartsWithSegments("/solicitar") ||
@@ -300,9 +300,9 @@ app.MapGet("/portal-billing.js", (HttpContext context) =>
     context.Response.Headers.CacheControl = "no-store, no-cache, must-revalidate";
     return Results.File(Path.Combine(app.Environment.ContentRootPath, "wwwroot", "portal-billing.js"), "application/javascript; charset=utf-8");
 });
-app.MapGet("/media/ares-presentacion.mp4", () =>
+app.MapGet("/media/ares-presentacion-v2.mp4", () =>
 {
-    string videoPath = Path.Combine(app.Environment.ContentRootPath, "wwwroot", "media", "ares-presentacion.mp4");
+    string videoPath = Path.Combine(app.Environment.ContentRootPath, "wwwroot", "media", "ares-presentacion-v2.mp4");
     return File.Exists(videoPath)
         ? Results.File(videoPath, "video/mp4", enableRangeProcessing: true)
         : Results.NotFound();

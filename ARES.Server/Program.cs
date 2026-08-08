@@ -166,6 +166,7 @@ app.Use(async (context, next) =>
         context.Request.Path.Equals("/admin-operations.js") ||
         context.Request.Path.Equals("/admin-downloads.js") ||
         context.Request.Path.Equals("/portal-billing.js") ||
+        context.Request.Path.Equals("/media/ares-presentacion.mp4") ||
         context.Request.Path.Equals("/api/downloads") ||
         context.Request.Path.StartsWithSegments("/health") ||
         context.Request.Path.StartsWithSegments("/solicitar") ||

@@ -568,6 +568,22 @@ app.MapGet("/api/platform/overview", async (HttpContext context) =>
     }
     return Results.Ok(new { alerts, audit = await persistence.GetPlatformAuditAsync() });
 });
+app.MapPost("/api/platform/alerts/test", async (HttpContext context) =>
+{
+    if (!IsPlatformOwner(context)) return Results.Forbid();
+    bool telegramConfigured = !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("ARES_TELEGRAM_BOT_TOKEN")) &&
+        !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("ARES_TELEGRAM_CHAT_ID"));
+    bool emailConfigured = !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("ARES_SMTP_HOST")) &&
+        !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("ARES_ALERT_EMAIL_TO")) &&
+        !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("ARES_SMTP_FROM"));
+    if (!telegramConfigured && !emailConfigured)
+        return Results.BadRequest(new { error = "No hay un canal de alertas configurado en el servidor." });
+
+    await EnviarAlertaExternaAsync("Plataforma ARES", "PRUEBA_ALERTA", "Esta es una prueba manual de las alertas operativas.");
+    AuthenticatedAdmin actor = CurrentAdmin(context);
+    await persistence.AddPlatformAuditAsync(actor.UserId, actor.DisplayName, null, "ALERTA_PRUEBA_ENVIADA", "Se envió una prueba a los canales de alerta configurados.");
+    return Results.Ok(new { sent = true, emailConfigured, telegramConfigured });
+});
 app.MapGet("/api/platform/staff", (HttpContext context) =>
     IsPlatformOwner(context) ? Results.Ok(platformStaff.Values.OrderBy(x => x.DisplayName)) : Results.Forbid());
 app.MapPut("/api/platform/staff", async (PlatformStaffRequest request, HttpContext context) =>

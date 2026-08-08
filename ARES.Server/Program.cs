@@ -300,6 +300,13 @@ app.MapGet("/portal-billing.js", (HttpContext context) =>
     context.Response.Headers.CacheControl = "no-store, no-cache, must-revalidate";
     return Results.File(Path.Combine(app.Environment.ContentRootPath, "wwwroot", "portal-billing.js"), "application/javascript; charset=utf-8");
 });
+app.MapGet("/media/ares-presentacion.mp4", () =>
+{
+    string videoPath = Path.Combine(app.Environment.ContentRootPath, "wwwroot", "media", "ares-presentacion.mp4");
+    return File.Exists(videoPath)
+        ? Results.File(videoPath, "video/mp4", enableRangeProcessing: true)
+        : Results.NotFound();
+});
 
 app.MapPost("/api/auth/login", async (LoginRequest request, HttpContext context, CancellationToken cancellationToken) =>
 {

@@ -5,7 +5,8 @@ namespace AdministracionEmpleados;
 internal sealed class AresSettings
 {
     private const string NombreConfiguracionLocal = "ares.local.json";
-    public string ServerUrl { get; set; } = "https://ares-3bic.onrender.com";
+    // El endpoint se distribuye preconfigurado: el cliente no debe tener que conocerlo ni editarlo.
+    public string ServerUrl { get; set; } = "https://controlares.com";
     public string ApiKey { get; set; } = "CAMBIAR-ESTA-CLAVE";
 
     public static AresSettings Cargar()
@@ -14,7 +15,12 @@ internal sealed class AresSettings
         string general = Path.Combine(AppContext.BaseDirectory, "appsettings.json");
         string? ruta = File.Exists(local) ? local : File.Exists(general) ? general : null;
         if (ruta == null) return new AresSettings();
-        return JsonSerializer.Deserialize<AresSettings>(File.ReadAllText(ruta), OpcionesJson()) ?? new AresSettings();
+        AresSettings settings = JsonSerializer.Deserialize<AresSettings>(File.ReadAllText(ruta), OpcionesJson()) ?? new AresSettings();
+        if (string.Equals(settings.ServerUrl.TrimEnd('/'), "https://ares-3bic.onrender.com", StringComparison.OrdinalIgnoreCase))
+        {
+            settings.ServerUrl = "https://controlares.com";
+        }
+        return settings;
     }
 
     public void GuardarLocal()

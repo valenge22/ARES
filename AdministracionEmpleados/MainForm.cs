@@ -824,10 +824,14 @@ namespace AdministracionEmpleados
         private Control CrearVistaConfiguracion()
         {
             var tarjeta = CrearTarjeta();
-            var titulo = CrearEncabezadoTarjeta("Servidor remoto", "Configuración usada por esta consola administrativa");
-            AresSettings configuracion = AresSettings.Cargar();
+            var titulo = CrearEncabezadoTarjeta("Configuración", "Tu consola se conecta de forma segura a ARES");
             var contenido = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.TopDown, Padding = new Padding(28, 22, 28, 28), WrapContents = false };
-            TextBox txtServidor = CrearCampoConfiguracion("URL HTTPS del servidor", configuracion.ServerUrl, contenido);
+            contenido.Controls.Add(new Label
+            {
+                AutoSize = true,
+                ForeColor = Color.FromArgb(51, 65, 85),
+                Text = "Servidor ARES: configurado automáticamente"
+            });
             string usuario = AresControlAuth.Client.User is null ? "" : $"{AresControlAuth.Client.User.DisplayName} · {AresControlAuth.Client.User.Email} · {NombreRol(AresControlAuth.Client.User.Role)}";
             contenido.Controls.Add(new Label { AutoSize = true, ForeColor = Color.FromArgb(51, 65, 85), Margin = new Padding(0, 14, 0, 0), Text = $"Sesión: {usuario}" });
             var licencia = new Label { AutoSize = false, Width = 560, Height = 78, ForeColor = Color.FromArgb(51, 65, 85), Margin = new Padding(0, 16, 0, 0), Text = "Licencia: consultando…" };
@@ -837,24 +841,17 @@ namespace AdministracionEmpleados
             administrarLicencia.Click += (_, _) => System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo($"{AresSettings.Cargar().ServerUrl.TrimEnd('/')}/portal") { UseShellExecute = true });
             contenido.Controls.Add(administrarLicencia);
             var estado = new Label { AutoSize = true, ForeColor = Color.FromArgb(100, 116, 139), Margin = new Padding(0, 14, 0, 0), Text = "La sesión está protegida para este usuario de Windows." };
-            var guardar = new Button { Text = "Guardar y probar conexión", Width = 220, Height = 40, Margin = new Padding(0, 20, 0, 0), FlatStyle = FlatStyle.Flat, BackColor = Color.FromArgb(37, 99, 235), ForeColor = Color.White, Cursor = Cursors.Hand };
+            var guardar = new Button { Text = "Probar conexión", Width = 180, Height = 40, Margin = new Padding(0, 20, 0, 0), FlatStyle = FlatStyle.Flat, BackColor = Color.FromArgb(37, 99, 235), ForeColor = Color.White, Cursor = Cursors.Hand };
             guardar.FlatAppearance.BorderSize = 0;
             guardar.Click += async (_, _) =>
             {
-                if (!Uri.TryCreate(txtServidor.Text.Trim(), UriKind.Absolute, out Uri? uri) || uri.Scheme != Uri.UriSchemeHttps)
-                {
-                    estado.ForeColor = Color.FromArgb(220, 38, 38);
-                    estado.Text = "Ingresá una dirección HTTPS válida.";
-                    return;
-                }
-                new AresSettings { ServerUrl = txtServidor.Text.TrimEnd('/'), ApiKey = configuracion.ApiKey }.GuardarLocal();
                 guardar.Enabled = false;
                 estado.ForeColor = Color.FromArgb(37, 99, 235);
                 estado.Text = "Probando conexión…";
                 await BuscarEquiposAsync();
                 guardar.Enabled = true;
                 estado.ForeColor = lblConexion.Text.StartsWith("Error") ? Color.FromArgb(220, 38, 38) : Color.FromArgb(22, 163, 74);
-                estado.Text = lblConexion.Text.StartsWith("Error") ? lblConexion.Text : "Configuración guardada. Conexión correcta.";
+                estado.Text = lblConexion.Text.StartsWith("Error") ? lblConexion.Text : "Conexión segura con ARES correcta.";
             };
             contenido.Controls.Add(guardar);
             if (AresControlAuth.Client.User?.Role is "Owner" or "Administrator")
